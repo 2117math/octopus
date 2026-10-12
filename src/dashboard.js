@@ -15,7 +15,7 @@
 // operator/OAuth-derived, but they still never reach innerHTML.
 
 import { createHash } from 'node:crypto';
-import { UNAVAILABLE_TEXT, RESET_CREDIT_MAX_AGE_MS, outsideSpendText, showSessionRow } from './status-renderer.js';
+import { UNAVAILABLE_TEXT, RESET_CREDIT_MAX_AGE_MS, outsideSpendText, forecastText, showSessionRow } from './status-renderer.js';
 import { USAGE_WINDOWS } from './client-usage.js';
 
 export function renderDashboardHtml() {
@@ -726,7 +726,7 @@ export const CARD_NOTE_MAX_AGE_MS = 60 * 1000;
 const SHARED_HELPERS = [
   scopedWeeklyRows, accountTokens, modelLabel, recentModelLabels, providerLabel, thresholdBadgeText, accountBadges, sessionRows, filterSessionRows, sortRows, uniqSorted,
   switchRequest, switchOutcome, accountControlRequest, accountControlOutcome, thresholdRequest, thresholdPercentText, thresholdOutcome, routeRows, problems, usageFor,
-  outsideSpendText, showSessionRow, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
+  outsideSpendText, forecastText, showSessionRow, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
 ].map(fn => fn.toString()).join('\n\n');
 
 // The constants ride along: `problems` closes over the thresholds and
@@ -1088,6 +1088,8 @@ ${SHARED_HELPERS}
     // Spend on this account that did not come through the proxy (#475).
     var outside = outsideSpendText(q.outsideSpend);
     if (outside) card.appendChild(el('div', 'usage', 'outside: ' + outside));
+    var forecast = forecastText(q.forecast, Date.now());
+    if (forecast) card.appendChild(el('div', 'usage', 'forecast: ' + forecast));
     var u = a.usage || {};
     var last = u.lastUsed ? ' · last ' + fmtAgo(u.lastUsed) : '';
     card.appendChild(el('div', 'usage', (u.totalRequests || 0) + ' req · ' + fmtNum(accountTokens(u)) + ' tok' + last));
