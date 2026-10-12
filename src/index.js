@@ -116,6 +116,7 @@ import {
   upsertRoute,
   setAccountDisabled,
   setAccountPriority,
+  renameAccount,
 } from './config-ops.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
@@ -217,6 +218,10 @@ switch (command) {
     break;
   case 'priority':
     await priorityCommand();
+    process.exit(0);
+    break;
+  case 'rename':
+    await renameCommand();
     process.exit(0);
     break;
   case 'disable':
@@ -2587,6 +2592,25 @@ async function priorityCommand() {
   await notifyRunningServer(config);
 }
 
+// ── rename ──────────────────────────────────────────────────
+
+async function renameCommand() {
+  const config = await loadOrCreateConfig();
+  const name = args[1];
+  const newName = args[2];
+
+  if (!name || !newName || newName.startsWith('--')) {
+    console.error('Usage: teamclaude rename <account-name|email> <new-name> [--org <name|uuid>]');
+    process.exit(1);
+  }
+
+  const renamed = applyOrExit(() => renameAccount(config, name, newName, { orgFilter: argValue('--org') ?? undefined }));
+  await saveConfig(config);
+  const routes = renamed.routes.length ? ` (updated route${renamed.routes.length > 1 ? 's' : ''}: ${renamed.routes.join(', ')})` : '';
+  console.log(`Renamed "${renamed.from}" to "${renamed.name}"${routes}`);
+  await notifyRunningServer(config);
+}
+
 // ── enable / disable ────────────────────────────────────────
 
 async function setDisabledCommand(disabled) {
@@ -2732,6 +2756,7 @@ Commands:
   disable <name>      Temporarily exclude an account from rotation
   enable <name>       Re-enable a disabled account (also clears a stuck error)
   priority <name> <n> Set rotation priority (lower = preferred; --first/--last)
+  rename <name> <new> Rename an account, updating the routes that list it
   route [list|add|rm] Per-model routing: pin model globs to specific accounts
                       (add <name> --match "<glob>" [--accounts "<name>"] [--bucket <b>])
   routing <name> [url|none]
