@@ -107,6 +107,7 @@ export function createDefaultConfig() {
     distributeSessions: false,
     // Idle rebalance of pinned sessions (see rebalanceSetting); off by default.
     rebalanceSessions: { enabled: false, idleSeconds: 300, gap: 0.10 },
+    sessionAffinity: true,
     sessionTitles: { enabled: false, width: 18 },
     quotaBarPercent: false,
     // Activity rows: 'full' (method and path) or 'compact' (wider session title).

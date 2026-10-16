@@ -83,6 +83,14 @@ const isMessageId = (id) => typeof id === 'string' && id.length > 0 && id.length
 
 // The Map key for a client-supplied pin key. Bounded here so every entry point
 // keys the same way and a long key cannot hold more memory than a short one.
+// The client session id ahead of the conversation digest (conversation.js
+// joins them with '/'; a Claude Code session id is a UUID and holds none).
+function clientSessionOf(key) {
+  if (typeof key !== 'string') return null;
+  const cut = key.indexOf('/');
+  return cut < 0 ? key : key.slice(0, cut);
+}
+
 function keyOf(key) {
   if (typeof key !== 'string' || key.length <= MAX_KEY_LENGTH) return key;
   return key.slice(0, MAX_KEY_LENGTH);
@@ -653,6 +661,48 @@ export class SessionTracker {
       if (this._isActive(s, now) && this._pinsInclude(s, accountIndex, now)) n += 1;
     }
     return n;
+  }
+
+  // [local patch] Every session the tracker still knows (within the known TTL,
+  // active or resting) that is pinned to `accountIndex`. The spread key for
+  // new sessions: a conversation that paused three minutes ago still holds its
+  // account and its prompt cache, so a new session should land elsewhere while
+  // another account is free, not beside it.
+  knownCountFor(accountIndex, now = this._now()) {
+    // Counted per CLIENT SESSION (the id ahead of the conversation digest), not
+    // per conversation: a session fanning out five agents on one account is one
+    // seat taken there, not five.
+    const seen = new Set();
+    for (const [key, s] of this.sessions) {
+      if (this._isExpired(s, now)) continue;
+      // The pin itself, however old within the known window: _pinsInclude is
+      // the ACTIVE test (a pin touched in the last two minutes) and would drop
+      // the resting session this count exists to keep seated.
+      for (const pin of s.pins.values()) {
+        if (pin.idx === accountIndex) { seen.add(clientSessionOf(key)); break; }
+      }
+    }
+    return seen.size;
+  }
+
+  // [local patch] The accounts the OTHER live conversations of this client
+  // session are pinned to, most recently pinned first — the session-affinity
+  // key: a conversation with no pin of its own (a fresh subagent, a helper
+  // call) follows the account its session already sits on instead of being
+  // placed afresh, so one session reads as one seat in the TUI and never
+  // "goes back and forth" between two accounts.
+  siblingAccounts(key, now = this._now()) {
+    const sid = clientSessionOf(key);
+    if (!sid) return [];
+    const pins = [];
+    for (const [k, s] of this.sessions) {
+      if (k === key || clientSessionOf(k) !== sid || this._isExpired(s, now)) continue;
+      for (const pin of s.pins.values()) pins.push(pin);
+    }
+    pins.sort((a, b) => b.at - a.at);
+    const out = [];
+    for (const pin of pins) if (!out.includes(pin.idx)) out.push(pin.idx);
+    return out;
   }
 
   /**

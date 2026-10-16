@@ -401,7 +401,7 @@ async function serverCommand() {
     console.error(`[Octopus] Bad adaptiveDistribution setting in ${getConfigPath()}: ${err.message}`);
     process.exit(1);
   }
-  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions });
+  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions, sessionAffinity: config.sessionAffinity !== false });
   // Names the activity log's session column from Claude Code's own on-disk
   // session titles. Built whether or not the TUI runs, so a reload has one
   // object to reconfigure.
@@ -607,6 +607,10 @@ async function serverCommand() {
     // whole application. Absent on disk means off again.
     config.rebalanceSessions = diskConfig.rebalanceSessions;
     accountManager.setRebalance(config.rebalanceSessions);
+    // Session affinity (one client session, one account): on unless the config
+    // says false, read per selection off the manager.
+    config.sessionAffinity = diskConfig.sessionAffinity !== false;
+    accountManager.setSessionAffinity(config.sessionAffinity);
     // Pick up a switchThreshold change the same way (teamclaude threshold, the
     // TUI settings screen, or a hand edit). thresholdFor() reads it off the
     // manager on every decision, so assigning it is the whole application —

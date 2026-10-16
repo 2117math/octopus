@@ -564,7 +564,7 @@ export class AccountManager {
    * @param {{ host: string, port: number }|null} [opts.listener]  this server's own address, so an accounts[].routing that points back at it is refused (see accountRouting)
    * @param {Object} [opts.rebalanceSessions]  idle rebalance, see rebalanceSetting (off by default)
    */
-  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null, rebalanceSessions } = {}) {
+  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null, rebalanceSessions, sessionAffinity = false } = {}) {
     // How long a just-minted token is trusted against a forced refresh.
     this._forcedRefreshFloorMs = forcedRefreshFloorMs;
     // Injectable for tests (mirrors Prober's probeFn); defaults to the real
@@ -591,6 +591,10 @@ export class AccountManager {
     // Idle rebalance of pinned sessions (see rebalanceSetting); read per
     // selection, so setRebalance on a config reload is the whole application.
     this.setRebalance(rebalanceSessions);
+    // [local patch] One client session, one account: a conversation without a
+    // pin of its own follows its session's siblings (see _selectForSession).
+    // Read per selection, so the setter is the whole application on reload.
+    this.sessionAffinity = sessionAffinity === true;
     // Optional session-title lookup for the rebalance log line; index.js points
     // it at the SessionTitles store. Null names a session by its id.
     /** @type {((id: string) => string|null)|null} */
@@ -1783,6 +1787,19 @@ export class AccountManager {
         this._isAvailable(a, model, advisorModel) && !exclude?.has(a.index) && (a.priority || 0) < (pinned.priority || 0));
       if (!betterExists) return this._rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) || pinned;
     }
+    // [local patch] Session affinity: no pin of this conversation's own was
+    // usable, but its client session may already be seated — on the account
+    // its other live conversations (the parent turn, sibling agents) are pinned
+    // to. Take that seat while it can serve the request, so the whole session
+    // stays on one account and shares the system-prompt cache there; upstream
+    // spread a fan-out across accounts for throughput, which is the "back and
+    // forth" this trades away. An unavailable seat falls through to placement.
+    if (this.sessionAffinity && this.distributeSessions) {
+      for (const idx of this.sessionTracker.siblingAccounts(sessionId)) {
+        const seat = this.accounts[idx];
+        if (seat && this._isAvailable(seat, model, advisorModel) && !exclude?.has(idx)) return seat;
+      }
+    }
     // No pin was usable, so this is a placement. Placing is aiming: it takes no
     // reading, and the next request to find the pin here takes it.
     return this._pickLeastLoaded(exclude, model, advisorModel);
@@ -1990,6 +2007,7 @@ export class AccountManager {
     let best = null;
     let bestPriority = Infinity;
     let bestSpent = Infinity;
+    let bestKnown = Infinity;
     let bestUsed = Infinity;
     let bestSessions = Infinity;
     let bestInFlight = Infinity;
@@ -1998,12 +2016,16 @@ export class AccountManager {
     candidates.forEach((account, i) => {
       const priority = account.priority || 0;
       const heldOff = spent[i];
-      // [local patch] Least-used weekly window first: the weekly utilization
-      // that gates this model (family bucket or shared weekly, whichever is
-      // higher), ascending. New sessions land on the account with the most
-      // weekly headroom, so no single account is drained to 100% while its
-      // siblings sit half-used. Unknown sorts first, as a reset does: using
-      // the account is how its quota becomes known.
+      // [local patch] Spread first, then least-used. A new session goes to an
+      // account no known session (active or resting, within the known TTL) is
+      // pinned to while one exists; only when every account already carries a
+      // session do two share one. Among accounts carrying the same number, the
+      // weekly window that gates this model (family bucket or shared weekly,
+      // whichever is higher) decides, ascending, so the week is drained evenly.
+      // Unknown weekly sorts first, as a reset does: using the account is how
+      // its quota becomes known. Active sessions and in-flight requests break
+      // the remaining ties, as upstream's even mode did.
+      const known = this.sessionTracker.knownCountFor(account.index, now);
       const used = this._rankedWeeklyUsed(account, model);
       const sessions = this.sessionTracker.activeCountFor(account.index, now);
       const inFlight = account.inFlight || 0;
@@ -2011,10 +2033,12 @@ export class AccountManager {
       const reset = this._rankedReset(account, model);
       const samePriority = priority === bestPriority;
       const sameSpend = samePriority && heldOff === bestSpent;
-      const sameUsed = sameSpend && used === bestUsed;
+      const sameKnown = sameSpend && known === bestKnown;
+      const sameUsed = sameKnown && used === bestUsed;
       if (priority < bestPriority
         || (samePriority && heldOff < bestSpent)
-        || (sameSpend && used < bestUsed)
+        || (sameSpend && known < bestKnown)
+        || (sameKnown && used < bestUsed)
         || (sameUsed && sessions < bestSessions)
         || (sameUsed && sessions === bestSessions && inFlight < bestInFlight)
         || (sameUsed && sessions === bestSessions && inFlight === bestInFlight && pressure < bestPressure)
@@ -2022,6 +2046,7 @@ export class AccountManager {
         best = account;
         bestPriority = priority;
         bestSpent = heldOff;
+        bestKnown = known;
         bestUsed = used;
         bestSessions = sessions;
         bestInFlight = inFlight;
@@ -2876,6 +2901,11 @@ export class AccountManager {
   /** Apply the `rebalanceSessions` setting; safe on every config reload. A
    *  session already moved stays where it went; only the next decision changes.
    *  @param {unknown} setting */
+  /** [local patch] Turn session affinity on or off (config `sessionAffinity`). */
+  setSessionAffinity(enabled) {
+    this.sessionAffinity = enabled === true;
+  }
+
   setRebalance(setting) {
     this.rebalance = rebalanceSetting(setting);
   }
