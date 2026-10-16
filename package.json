@@ -1,12 +1,11 @@
 {
-  "name": "@karpeleslab/teamclaude",
-  "version": "1.1.25",
-  "description": "Multi-account proxy for Claude Code and Codex: pools Claude Max, ChatGPT/Codex, API-key and third-party backend accounts, and rotates on quota",
+  "name": "octopus",
+  "version": "1.0.0",
+  "description": "Octopus — a fork of TeamClaude. Multi-account proxy for Claude Code and Codex: pools Claude Max, ChatGPT/Codex, API-key and third-party backend accounts, and rotates on quota",
   "type": "module",
   "main": "src/index.js",
   "bin": {
-    "teamclaude": "src/index.js",
-    "teamrouter": "src/index.js"
+    "octopus": "src/index.js"
   },
   "files": [
     "src/"
@@ -34,14 +33,6 @@
     "cli"
   ],
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/KarpelesLab/teamclaude.git"
-  },
-  "bugs": {
-    "url": "https://github.com/KarpelesLab/teamclaude/issues"
-  },
-  "homepage": "https://github.com/KarpelesLab/teamclaude#readme",
   "engines": {
     "node": ">=20.0.0"
   },

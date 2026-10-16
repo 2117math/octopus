@@ -1,8 +1,8 @@
-# TeamClaude
+# Octopus
 
-[![CI](https://github.com/KarpelesLab/teamclaude/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/teamclaude/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/@karpeleslab/teamclaude.svg)](https://www.npmjs.com/package/@karpeleslab/teamclaude)
-[![node](https://img.shields.io/node/v/@karpeleslab/teamclaude.svg)](https://nodejs.org)
+Octopus is a fork of [TeamClaude](https://github.com/KarpelesLab/teamclaude) (MIT).
+
+[![node](https://img.shields.io/badge/node-%3E%3D20-green.svg)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Multi-account proxy for [Claude Code](https://claude.ai/claude-code) and [Codex](https://github.com/openai/codex): it pools Claude Max, ChatGPT/Codex, API-key and third-party backend accounts, and rotates on quota.
@@ -11,21 +11,23 @@ It sits between the coding agent and the provider's API, holds several accounts,
 
 **It is built for one person.** The "team" is the agents: someone running ten, or fifty, coding-agent sessions at once needs more than one subscription, and switching accounts by hand each time one fills up is what this replaces. Every account in the pool is your own, and the client is the provider's own CLI. It is not a way to share an account between people, and not a bridge for other clients onto subscription credentials — see [Scope](#scope).
 
-![TeamClaude TUI](screenshots/teamclaude.png)
+![Octopus TUI](screenshots/teamclaude.png)
 
 ## Quick start
 
 Node.js 20+ required.
 
 ```bash
-npm install -g @karpeleslab/teamclaude
+# Octopus is not on npm. Run it from a clone of this repository:
+git clone <this repository> octopus && cd octopus
+npm link          # puts `octopus` on PATH (or run `node src/index.js` instead)
 
-teamclaude login     # browser OAuth, run it once per account
-teamclaude server    # start the proxy, shows the TUI
-teamclaude run       # in another terminal: Claude Code through the proxy
+octopus login     # browser OAuth, run it once per account
+octopus server    # start the proxy, shows the TUI
+octopus run       # in another terminal: Claude Code through the proxy
 ```
 
-Already logged into Claude Code? `teamclaude import` takes its credentials instead of a fresh OAuth round. A container image is on GHCR — see [Running in a container](docs/usage.md#running-in-a-container). API keys, and one email holding accounts in several orgs, are covered in [docs/accounts.md](docs/accounts.md).
+Already logged into Claude Code? `octopus import` takes its credentials instead of a fresh OAuth round. A container image is on GHCR — see [Running in a container](docs/usage.md#running-in-a-container). API keys, and one email holding accounts in several orgs, are covered in [docs/accounts.md](docs/accounts.md).
 
 ## What it does
 
@@ -47,12 +49,12 @@ Already logged into Claude Code? `teamclaude import` takes its credentials inste
 ## Everyday commands
 
 ```bash
-teamclaude accounts          # accounts with tier and token status
-teamclaude status            # live proxy status, needs a running server
-teamclaude disable <name>    # pause an account without removing it
-teamclaude priority <name> 1 # rotation order, lower = preferred
-teamclaude alias --install   # make plain `claude` go through the proxy
-teamclaude help              # everything else
+octopus accounts          # accounts with tier and token status
+octopus status            # live proxy status, needs a running server
+octopus disable <name>    # pause an account without removing it
+octopus priority <name> 1 # rotation order, lower = preferred
+octopus alias --install   # make plain `claude` go through the proxy
+octopus help              # everything else
 ```
 
 Full reference: [docs/usage.md](docs/usage.md).
@@ -92,11 +94,11 @@ TeamClaude is becoming **TeamRouter** — it pools Codex and third-party account
 
 ## Security
 
-The only canonical sources for TeamClaude are this repository (https://github.com/KarpelesLab/teamclaude) and the [`@karpeleslab/teamclaude`](https://www.npmjs.com/package/@karpeleslab/teamclaude) npm package. TeamClaude is **never** distributed as a downloadable binary archive, so be wary of soft-forks that bundle a `.zip` and tell you to extract and run it. See [SECURITY.md](SECURITY.md) for details and how to report issues.
+Octopus is a local fork and is not published anywhere. The canonical sources for the upstream project are its repository (https://github.com/KarpelesLab/teamclaude) and the [`@karpeleslab/teamclaude`](https://www.npmjs.com/package/@karpeleslab/teamclaude) npm package.
 
 ## Scope
 
-TeamClaude is a local proxy holding your own credentials and driving the provider's own CLI, for one person's work. That holds for every provider it supports, not only Anthropic:
+Octopus is a local proxy holding your own credentials and driving the provider's own CLI, for one person's work. That holds for every provider it supports, not only Anthropic:
 
 - **One person, their own accounts.** Not account sharing, not a hosted service, not resale.
 - **The provider's own client.** Claude Code on Claude accounts, the Codex CLI on Codex accounts. No support for other harnesses on subscription credentials.
