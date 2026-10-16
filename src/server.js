@@ -603,6 +603,16 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
       // Status endpoint
       if (req.method === 'GET' && req.url === '/teamclaude/status') {
         const status = accountManager.getStatus({ sessionDetail: config.proxy?.sessionDetail === true });
+        // One row per client session (title, account, last request), which is
+        // what `octopus sessions`, `octopus move` and the attached TUI's
+        // session rows read. Operator callers only: a session title is the
+        // subject of someone's conversation, and a client key holder is a
+        // tenant, not the person who runs the proxy. Kept apart from
+        // `sessions.items`, the per-conversation detail proxy.sessionDetail
+        // gates, which has a different shape and its own readers.
+        if (!req.tcClient && status.sessions && typeof accountManager.sessionList === 'function') {
+          status.sessions.list = accountManager.sessionList({ title: hooks.sessionTitle ?? null, limit: SESSION_LIST_LIMIT });
+        }
         const extra = hooks.getStatusExtra?.() || {};
         res.writeHead(200, { 'Content-Type': 'application/json' });
         // Counters only: how full the upstream admission gate is (see
@@ -788,6 +798,102 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           + (eligible ? '' : ` — ${reason}, so rotation will not use it`));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, account: name, eligible, ...(reason ? { reason } : {}) }));
+        return;
+      }
+
+      // Session move — re-pin one client session onto another account, the
+      // headless equivalent of the TUI's `m`. Body:
+      // {"session": "<id or a prefix of it>", "account": "<name|email|uuid|index>"}.
+      // Unlike /switch, which only steers sessions not yet placed, this moves
+      // one that already is, from its next request on. Refused to a client key
+      // here rather than through CLIENT_KEY_REFUSED_PATHS: one tenant must not
+      // move another's session, and that map is also the dashboard's list of
+      // controls to hide, which has no control for this.
+      if (req.method === 'POST' && req.url === '/teamclaude/session-move') {
+        if (req.tcClient) {
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'a client key cannot move sessions' }));
+          return;
+        }
+        if (typeof accountManager.moveSession !== 'function' || typeof accountManager.sessionList !== 'function') {
+          res.writeHead(501, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false, error: 'session move not supported' }));
+          return;
+        }
+        const reply = (code, body) => {
+          res.writeHead(code, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        const names = () => (accountManager.accounts || []).map(a => a.name);
+        let body;
+        try {
+          body = JSON.parse(await readControlBody(req) || '{}') ?? {};
+        } catch (err) {
+          const tooLarge = /** @type {Error} */ (err).message === 'body too large';
+          reply(tooLarge ? 413 : 400, { ok: false, error: tooLarge ? 'request body too large' : 'invalid request body' });
+          return;
+        }
+        // The session is matched against ids the tracker holds, so anything
+        // outside the header's own charset could never match one; refusing it
+        // here also keeps a hostile string out of the error echoed back.
+        const wanted = typeof body.session === 'string' ? body.session.trim() : '';
+        if (!wanted || !SESSION_ID_SHAPE.test(wanted)) {
+          reply(400, { ok: false, error: 'missing or malformed "session"' });
+          return;
+        }
+        const token = typeof body.account === 'number' ? String(body.account)
+          : typeof body.account === 'string' ? body.account.trim() : '';
+        if (!token) {
+          reply(400, { ok: false, error: 'missing "account"', accounts: names() });
+          return;
+        }
+        // A position is accepted here, unlike a request pin (see
+        // resolveAccountPin): a move is one act checked by whoever typed it,
+        // not a reference that outlives a renumbering.
+        let index = resolveAccountPin(accountManager, token);
+        if (index == null && /^\d+$/.test(token) && Number(token) < (accountManager.accounts || []).length) index = Number(token);
+        if (index == null) {
+          reply(404, { ok: false, error: `no such account "${safeLine(token, 64)}"`, accounts: names() });
+          return;
+        }
+        const known = accountManager.sessionList({ title: hooks.sessionTitle ?? null });
+        const exact = known.filter(s => s.id === wanted);
+        const matches = exact.length ? exact : known.filter(s => s.id.startsWith(wanted));
+        if (!matches.length) {
+          reply(404, { ok: false, error: `no known session "${wanted}"` });
+          return;
+        }
+        if (matches.length > 1) {
+          reply(400, {
+            ok: false,
+            error: `"${wanted}" matches ${matches.length} sessions; give more of the id`,
+            candidates: matches.slice(0, 10).map(s => ({ id: s.id, title: s.title })),
+          });
+          return;
+        }
+        const [session] = matches;
+        const moved = accountManager.moveSession(session.id, index);
+        if (!moved.ok) {
+          reply(409, { ok: false, error: moved.error });
+          return;
+        }
+        const from = moved.from == null ? null : accountManager.accounts[moved.from]?.name ?? null;
+        const to = accountManager.accounts[index].name;
+        // Same trace the manual switch leaves: in the TUI this line lands in the
+        // activity pane, headless it is teed to the activity log.
+        const label = session.title || session.id.slice(0, 8);
+        console.log(`[Octopus] Moved session "${safeLine(label, 60)}" ${from ?? '?'} → ${to} (control endpoint)`
+          + (session.clientPinned ? ' — but the client pins it with TC_ACCT; the move has no effect' : ''));
+        reply(200, {
+          ok: true,
+          session: session.id,
+          title: session.title,
+          from,
+          fromIndex: moved.from,
+          to,
+          toIndex: index,
+          clientPinned: session.clientPinned,
+        });
         return;
       }
 
@@ -1348,6 +1454,11 @@ export function clientPassthroughOrigin({ authority, url, config, accounts = [] 
 // header parser would otherwise let C1 control bytes through untouched.
 const SESSION_ID_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
 
+// Most rows `sessions.list` carries in a status reply. The attached TUI polls
+// status every second, so the list is capped rather than sized by the tracker,
+// whose own bound is ten thousand.
+const SESSION_LIST_LIMIT = 100;
+
 /** The session id a request carries, or null when the header is absent or
  *  malformed — a malformed one is treated as no session, not rejected.
  *
@@ -1683,6 +1794,10 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
         sessionId,
         conversation,
         dimensions: Object.fromEntries(usageDimensions.map(d => [d.name, d.key])),
+        // For the per-session list: what it asked for, and whether the client
+        // pinned the account itself (that pin outranks a moved session pin).
+        model,
+        clientPinned: pinnedIndex != null,
       });
       // Everything forwardRequest waits on — the upstream admission queue, the
       // upstream request itself, a quota-hold or rate-limit timer, a silent SSE

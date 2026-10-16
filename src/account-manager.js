@@ -4,7 +4,7 @@ import { refreshCodexToken } from './codex-auth.js';
 import { parseCodexQuota, parseCodexPlanType, parseCodexActiveLimit } from './codex-quota.js';
 import { sameIdentity } from './identity.js';
 import { weeklyBucketForModel, modelGlobMatches, modelFamily, gatingUtilization, resolveMaxUsage, spendCapReached, resolveSwitchThreshold, sanitizeSwitchThreshold, WEEKLY_BUCKET_KEYS } from './model.js';
-import { SessionTracker } from './session-tracker.js';
+import { SessionTracker, CLIENT_SESSION_ID } from './session-tracker.js';
 import { buildQuotaSummary, quotaTier } from './quota-summary.js';
 import { ROLLOVER_MIN_JUMP_MS, remapHeld, findHeld, dropHeld, newObservation } from './rollover.js';
 import { decideBand, pressureOf, pressureRank, assertNever } from './band-decision.js';
@@ -1974,6 +1974,7 @@ export class AccountManager {
     // taken where the evidence is, at the start of the NEXT request from
     // wherever this one left the pin (see _restOn).
     this.sessionTracker.touch(sessionId, accountIndex, bucket);
+    this.sessionTracker.noteModel(sessionId, model);
     // Except the FIRST one, which discards nothing: otherwise a session's
     // opening window is first-sighted a request late (see _firstSightOn).
     if (!this.expiryRouting.enabled || !this.expiryRouting.preempt) return;
@@ -2182,6 +2183,65 @@ export class AccountManager {
   /** { known, active, perAccount } session counts for status/TUI. */
   sessionStats() {
     return { ...this.sessionTracker.stats(), mode: this.distributionMode, draining: this.drainingCount() };
+  }
+
+  /**
+   * The known client sessions, newest first, for the TUI's per-account session
+   * rows, its move picker and the status payload's `sessions.list`. `title`
+   * names a session (the server's SessionTitles lookup); a lookup that throws
+   * or finds nothing leaves the title null. `lastSeen` is ms ago.
+   *
+   * @param {{ title?: ((id: string) => string|null)|null, limit?: number, maxAgeMs?: number }} [opts]
+   */
+  sessionList({ title = null, limit = Infinity, maxAgeMs = Infinity } = {}) {
+    return this.sessionTracker.sessionList(undefined, { limit, maxAgeMs }).map(s => {
+      let named = null;
+      if (title) {
+        try { named = title(s.id); } catch { named = null; }
+      }
+      return {
+        id: s.id,
+        title: typeof named === 'string' && named ? safeLine(named, 120) || null : null,
+        account: s.account,
+        accountName: s.account == null ? null : this.accounts[s.account]?.name ?? null,
+        lastSeen: s.lastSeen,
+        active: s.active,
+        model: s.model,
+        clientPinned: s.clientPinned,
+      };
+    });
+  }
+
+  /**
+   * Move a client session onto another account: every pin it holds, in every
+   * weekly bucket and every conversation of it, now names `accountIndex`. The
+   * operator's counterpart of the distribution that placed it, for a session
+   * whose account is running low while another has room. Unlike
+   * setCurrentAccount, which only steers sessions not yet placed, this moves
+   * one that already is. It takes effect from the session's next request; the
+   * prompt cache it built on the old account does not come along.
+   *
+   * A session that never reached an account has no pin to move, and one served
+   * by another provider cannot move to this account at all, so both are
+   * refused rather than recorded.
+   *
+   * @param {string} sessionId the client session id
+   * @param {number} accountIndex
+   * @returns {{ ok: true, session: string, from: number|null, fromAll: number[], to: number } | { ok: false, error: string }}
+   */
+  moveSession(sessionId, accountIndex) {
+    if (typeof sessionId !== 'string' || !CLIENT_SESSION_ID.test(sessionId)) return { ok: false, error: 'invalid session id' };
+    const target = Number.isInteger(accountIndex) ? this.accounts[accountIndex] : null;
+    if (!target) return { ok: false, error: 'no such account' };
+    const before = this.sessionTracker.sessionAccounts(sessionId);
+    if (!before.length) return { ok: false, error: 'that session has not been routed to an account yet' };
+    const provider = providerOf(target);
+    if (before.some(idx => this.accounts[idx] && providerOf(this.accounts[idx]) !== provider)) {
+      return { ok: false, error: `"${target.name}" serves a different provider than this session` };
+    }
+    const fromAll = this.sessionTracker.movePins(sessionId, accountIndex);
+    if (!fromAll) return { ok: false, error: 'that session has not been routed to an account yet' };
+    return { ok: true, session: sessionId, from: fromAll[0] ?? null, fromAll, to: accountIndex };
   }
 
   /**

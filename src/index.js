@@ -817,6 +817,9 @@ async function serverCommand() {
 
   // Expose reload to the proxy's control endpoint (works with or without TUI).
   hooks.reload = reloadAccounts;
+  // Names each row of the status payload's `sessions.list` from the same cache
+  // the activity log reads; null while session titles are off.
+  hooks.sessionTitle = (/** @type {string} */ sid) => sessionTitles.get(sid);
   hooks.persistAccounts = () => atomicConfigUpdate(mergeAccountsOnto);
 
   // Account controls for the dashboard's POST /teamclaude/{priority,disable}.

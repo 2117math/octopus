@@ -69,6 +69,15 @@ export const MAX_KEY_LENGTH = MAX_SESSION_ID_LENGTH + 1 + 22;
 export const MAX_THREAD_MESSAGES = 32;
 const MAX_MESSAGE_ID_LENGTH = 128;
 
+// The shape a client session id has to have before an operator command may
+// name one (AccountManager.moveSession): the same conservative charset the
+// server applies to the session header, so an id that could never have been
+// tracked is refused rather than looked up.
+export const CLIENT_SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
+// A model id is client-supplied too. It is kept for the per-session readout
+// only, so it is bounded like every other label on the record.
+const MAX_MODEL_LENGTH = 64;
+
 /** @param {unknown} id @returns {id is string} */
 const isMessageId = (id) => typeof id === 'string' && id.length > 0 && id.length <= MAX_MESSAGE_ID_LENGTH;
 
@@ -447,6 +456,12 @@ export class SessionTracker {
         conversation: null,
         client: null,
         dimensions: null,
+        // The model the conversation last asked for, and whether its client
+        // pinned it to an account itself (TC_ACCT, `/tc-acct/`), for the
+        // per-session list (sessionList). A client pin outranks the session
+        // pin, so a move cannot affect a conversation that carries one.
+        model: null,
+        clientPinned: false,
       };
       this.sessions.set(sessionId, s);
     }
@@ -640,6 +655,121 @@ export class SessionTracker {
     return n;
   }
 
+  /**
+   * Record the model a conversation's request asked for, for the per-session
+   * list. Like recordTokens it never creates a record.
+   *
+   * @param {string|null} sessionId
+   * @param {unknown} model
+   * @param {number} [now]
+   */
+  noteModel(sessionId, model, now = this._now()) {
+    const s = this._live(sessionId, now);
+    if (s && typeof model === 'string' && model) s.model = model.slice(0, MAX_MODEL_LENGTH);
+  }
+
+  /**
+   * The distinct accounts a client session's conversations are pinned to, most
+   * recent pin first. `sessionId` names the CLIENT session: every conversation
+   * whose label is that session counts, and so does a record keyed by the bare
+   * id (a request whose body named no conversation).
+   *
+   * @param {string|null} sessionId
+   * @param {number} [now]
+   * @returns {number[]}
+   */
+  sessionAccounts(sessionId, now = this._now()) {
+    const pins = [];
+    for (const [, s] of this._recordsOf(sessionId, now)) pins.push(...s.pins.values());
+    return [...new Set(pins.sort((a, b) => b.at - a.at).map(p => p.idx))];
+  }
+
+  /**
+   * Re-point every pin a client session holds, in every bucket and every one of
+   * its conversations, at `accountIndex`: an operator moving a session by hand.
+   * The next request of each conversation routes there as if it had always
+   * been pinned there.
+   *
+   * The pins' ages are kept, so what counts as load does not change; only the
+   * account it counts on does. The rollover observations are left alone, for
+   * the reason refsFor gives: an observation names its own account, and one
+   * naming the account the session left is no evidence about the new one.
+   *
+   * @param {string|null} sessionId
+   * @param {number} accountIndex
+   * @param {number} [now]
+   * @returns {number[]|false} the accounts the pins were on, most recent first;
+   *   false when the session is unknown or holds no pin yet
+   */
+  movePins(sessionId, accountIndex, now = this._now()) {
+    if (!Number.isInteger(accountIndex) || accountIndex < 0) return false;
+    const from = this.sessionAccounts(sessionId, now);
+    if (!from.length) return false;
+    for (const [, s] of this._recordsOf(sessionId, now)) {
+      for (const pin of s.pins.values()) pin.idx = accountIndex;
+    }
+    return from;
+  }
+
+  // The live records of one client session, dropping expired ones on the way
+  // past. Walks rather than indexing, like recordOutcomeForSession.
+  _recordsOf(sessionId, now) {
+    const out = [];
+    if (!sessionId) return out;
+    const key = keyOf(sessionId);
+    for (const [k, s] of this.sessions) {
+      if (k !== key && s.sessionId !== sessionId) continue;
+      if (this._isExpired(s, now)) { this.sessions.delete(k); continue; }
+      out.push([k, s]);
+    }
+    return out;
+  }
+
+  /**
+   * One row per CLIENT session, newest first: the list an operator picks a
+   * session to move from. Conversations of one session are folded into it,
+   * because the session is what the operator recognises and what a move acts
+   * on. `account` is the session's most recent pin; `lastSeen` is how long ago
+   * (ms) the session last made a request; `model` the last model it asked for.
+   *
+   * @param {number} [now]
+   * @param {{ limit?: number, maxAgeMs?: number }} [opts]
+   * @returns {{ id: string, account: number|null, lastSeen: number, active: boolean, model: string|null, clientPinned: boolean }[]}
+   */
+  sessionList(now = this._now(), { limit = Infinity, maxAgeMs = Infinity } = {}) {
+    /** @type {Map<string, any>} */
+    const groups = new Map();
+    for (const [key, s] of this.sessions) {
+      if (this._isExpired(s, now)) { this.sessions.delete(key); continue; }
+      const id = s.sessionId || key;
+      let g = groups.get(id);
+      if (!g) {
+        g = { id, account: null, pinAt: -Infinity, seen: -Infinity, modelSeen: -Infinity, active: false, model: null, clientPinned: false };
+        groups.set(id, g);
+      }
+      for (const pin of s.pins.values()) {
+        if (pin.at > g.pinAt) { g.pinAt = pin.at; g.account = pin.idx; }
+      }
+      if (this._isActive(s, now)) g.active = true;
+      // The newest request speaks for the session: a pin the client sent on
+      // its last request is the one in force now.
+      if (s.lastSeen >= g.seen) { g.seen = s.lastSeen; g.clientPinned = s.clientPinned === true; }
+      if (s.model && s.lastSeen >= g.modelSeen) { g.modelSeen = s.lastSeen; g.model = s.model; }
+    }
+    return [...groups.values()]
+      .filter(g => g.active || now - g.seen <= maxAgeMs)
+      .sort((a, b) => b.seen - a.seen)
+      .slice(0, limit)
+      .map(g => ({
+        id: g.id,
+        account: g.account,
+        lastSeen: Math.max(0, now - g.seen),
+        active: g.active,
+        model: g.model,
+        clientPinned: g.clientPinned,
+      }));
+  }
+
   // Ids of every known (non-expired) session that carries a pin. Snapshotted when
   // session distribution is turned off, so those sessions can be drained on their
   // existing accounts while new ones route by plain rotation. Expired-on-read
@@ -787,6 +917,8 @@ function applyMetadata(s, metadata) {
   if (typeof metadata.client === 'string' && metadata.client) s.client = metadata.client;
   if (typeof metadata.sessionId === 'string' && metadata.sessionId) s.sessionId = metadata.sessionId;
   if (typeof metadata.conversation === 'string' && metadata.conversation) s.conversation = metadata.conversation;
+  if (typeof metadata.model === 'string' && metadata.model) s.model = metadata.model.slice(0, MAX_MODEL_LENGTH);
+  if (typeof metadata.clientPinned === 'boolean') s.clientPinned = metadata.clientPinned;
   const dims = metadata.dimensions;
   if (dims && typeof dims === 'object' && Object.keys(dims).length) {
     s.dimensions = { ...(s.dimensions || {}), ...dims };
