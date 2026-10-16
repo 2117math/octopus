@@ -27,6 +27,9 @@ const text = (value, max, fallback = '') => {
 };
 const NAME_MAX = 64;
 const LABEL_MAX = 32;
+// A session id off the wire is drawn and sent back in a move request, so only
+// the shape the server itself accepts for one is kept.
+const SESSION_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
 // Addresses that reach this machine. A server bound to one of these exempts
 // loopback clients from the proxy-key gate, which changes what a 401 can mean.
@@ -77,6 +80,25 @@ export class RemoteControl {
     } catch (err) {
       if (!err.answered && (err.status === 404 || err.status === 501)) {
         throw new Error('this server does not support switching accounts');
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Move one session onto another account on the running server. A server
+   * predating the endpoint answers 404 without the control plane's error
+   * shape, which is reported as the feature missing, as for switchAccount.
+   *
+   * @param {string} session the session id
+   * @param {string} account the account name
+   */
+  async moveSession(session, account) {
+    try {
+      return await this._action('POST', '/teamclaude/session-move', { session, account });
+    } catch (err) {
+      if (!err.answered && (err.status === 404 || err.status === 501)) {
+        throw new Error('this server does not support moving sessions');
       }
       throw err;
     }
@@ -203,6 +225,9 @@ export class RemoteAccountManager {
     this.distributionMode = 'off';
     this.routes = [];
     this.sessions = { active: 0, known: 0, perAccount: {} };
+    // The server's `sessions.list`, cleaned (see applyStatus). Kept apart from
+    // `sessions`, whose shape the dashboard compares structurally.
+    this.sessionItems = [];
     this.connected = false;   // false ⇒ the view is a stale snapshot
     this.lastError = null;
     this.status = null;
@@ -293,6 +318,21 @@ export class RemoteAccountManager {
       // payload the dashboard compares structurally.
       ...(sessions.mode ? { mode: sessions.mode } : {}),
     };
+    // One row per client session. Everything in it is drawn into the frame and
+    // the id is sent back by a move, so each field is held to its own shape and
+    // a row whose id is not one is dropped.
+    this.sessionItems = (Array.isArray(sessions.list) ? sessions.list : [])
+      .filter(s => typeof s?.id === 'string' && SESSION_ID.test(s.id))
+      .map(s => ({
+        id: s.id,
+        title: s.title == null ? null : text(s.title, 120) || null,
+        account: Number.isInteger(s.account) && s.account >= 0 && s.account < this.accounts.length ? s.account : null,
+        accountName: s.accountName == null ? null : text(s.accountName, NAME_MAX) || null,
+        lastSeen: Number.isFinite(s.lastSeen) && s.lastSeen >= 0 ? s.lastSeen : Infinity,
+        active: s.active === true,
+        model: s.model == null ? null : text(s.model, 64) || null,
+        clientPinned: s.clientPinned === true,
+      }));
     this.distributeSessions = !!sessions.distribute;
     // A server too old to send `mode` still reports `distribute`, so fall back
     // to the behaviour that flag alone used to mean rather than showing 'off'.
@@ -327,6 +367,21 @@ export class RemoteAccountManager {
 
   sessionStats() {
     return { ...this.sessions };
+  }
+
+  /** Mirrors AccountManager.sessionList off the last payload. `title` names a
+   *  session the server sent untitled, from this machine's own transcripts.
+   * @param {{ title?: ((id: string) => string|null)|null, maxAgeMs?: number, limit?: number }} [opts] */
+  sessionList({ title = null, maxAgeMs = Infinity, limit = Infinity } = {}) {
+    return this.sessionItems
+      .filter(s => s.active || s.lastSeen <= maxAgeMs)
+      .slice(0, limit)
+      .map(s => {
+        if (s.title || !title) return { ...s };
+        let named = null;
+        try { named = title(s.id); } catch { named = null; }
+        return { ...s, title: typeof named === 'string' && named ? text(named, 120) || null : null };
+      });
   }
 
   getRoutes() {
@@ -391,6 +446,7 @@ export function createAttachSession({ control, config, onQuit, pollMs = DEFAULT_
     saveConfig: async () => { throw new Error('attach mode cannot write config'); },
     syncAccounts: async () => (await control.reload())?.added || 0,
     applySwitch: name => control.switchAccount(name),
+    applySessionMove: (session, account) => control.moveSession(session, account),
     onQuit: () => { stop(); onQuit?.(); },
   });
 

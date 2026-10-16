@@ -12,7 +12,7 @@ import { configIndexFor, managerAccountFor, markAccountRemoved, markAccountAdded
 import { PROVIDERS, providerOf, isSubscriptionAccount, upstreamFor } from './provider.js';
 import { mintAccountId } from './account-id.js';
 import { formatPercent, heldResetCredits, showSessionRow } from './status-renderer.js';
-import { resolveMaxUsage, resolveMaxSpendMinor, switchThresholdDiffs, modelLabel, EFFORT_SEP } from './model.js';
+import { resolveMaxUsage, resolveMaxSpendMinor, switchThresholdDiffs, modelLabel, EFFORT_SEP, weeklyBucketForModel, modelFamily } from './model.js';
 import { parseProxyUrl, proxyToUrl, describeProxy, describeSelfProxy, resolveUpstreamProxy, setUpstreamProxy, getUpstreamProxy, localListener, isSelfProxy } from './upstream-proxy.js';
 import { describeRouting, parseRoutingUrl, routingToUrl, checkRouting } from './account-routing.js';
 import { sanitizeText, safeLine } from './safe-text.js';
@@ -97,6 +97,33 @@ const SAFE_SID = /^[A-Za-z0-9._-]+$/;
 const shortSid = sid => (SAFE_SID.test(sid) ? sid : safeLine(sid, 64) || '?').slice(0, SESSION_ID_LEN);
 const sessionTag = (sid, title = null, width = SESSION_ID_LEN) =>
   sid ? fg(sessionColorCode(sid), rpad(truncate(title || shortSid(sid), width), width)) : ' '.repeat(width);
+
+// The per-account session row (under each account) lists the sessions pinned
+// there that made a request this recently. Longer than the tracker's active
+// window, so a session between turns stays visible, and far shorter than its
+// known hour, so the row is about what is running rather than what lingers.
+const SESSION_ROW_WINDOW_MS = 10 * 60 * 1000;
+// Columns one session label may take on that row, so a long generated title
+// cannot crowd every other session off it.
+const SESSION_ROW_LABEL_W = 24;
+const strike = s => `${ESC}9m${s}${RESET}`;
+// "3m ago" for a session's last request; the tracker forgets one after an hour.
+function formatAgo(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
+// The family a session last asked for, else its (client-supplied) model id.
+function modelTag(model) {
+  const family = modelFamily(model);
+  if (family !== 'other') return family;
+  return typeof model === 'string' ? safeLine(model, 20) : '';
+}
+// A utilization as a fixed-width whole percentage, '-' when unreported.
+const pctCell = v => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '-').padStart(4);
 
 // Which quota-family bar (F7/S7) a route binds to, or null for a general route.
 // Auto routes are named 'fable'/'sonnet'; a configured route is classified by its
@@ -734,6 +761,8 @@ export class TUI {
     // over its control plane. Everything that would mutate local state is off,
     // and a switch becomes a request (applySwitch) instead of an assignment.
     remote = false, applySwitch = null,
+    // Attach mode's `m`: the move is a request to the server, like a switch.
+    applySessionMove = null,
     // Injectable so the import path can be exercised without a real credentials
     // file or a live profile call.
     readCredentials = importCredentials, readProfile = fetchProfile,
@@ -752,6 +781,7 @@ export class TUI {
     this.am = accountManager;
     this.remote = remote;
     this.applySwitch = applySwitch;
+    this.applySessionMove = applySessionMove;
     this.config = config;
     this.saveConfig = saveConfig;
     this.syncAccounts = syncAccounts;
@@ -780,6 +810,7 @@ export class TUI {
     this.selIdx = 0;
     this.selRoute = null;    // in switch mode: null = global default, else a getRoutes() entry to pin
     this.selReturn = 'normal'; // mode to fall back to when select mode closes
+    this.move = null;        // the `m` picker while it is open (see _openMove)
     this.setIdx = 0;         // cursor row on the settings screen (BIOS-style nav)
     this.setScroll = 0;      // first body line the settings screen shows (see _viewport)
     this.blockIdx = 0;       // cursor row on the blocked-models editor
@@ -1214,6 +1245,7 @@ export class TUI {
       case 'pick': this._keyPick(k); break;
       case 'blocklist': this._keyBlocklist(k); break;
       case 'login': this._keyLogin(k); break;
+      case 'move': this._keyMove(k); break;
     }
     this.render();
   }
@@ -1226,6 +1258,8 @@ export class TUI {
       this.mode = 'select'; this.selAction = 'switch'; this.selIdx = Math.max(0, this.am.currentIndex); this.selRoute = null; this.selReturn = 'normal';
     }
     else if (k === 'R') { this._doSync(); }
+    // Available in attach mode too: there the move is a request to the server.
+    else if (k === 'm' && this.am.accounts.length > 0) { this._openMove(); }
     // The keys below all edit local state or call out to Anthropic, neither of
     // which attach mode can do — the server owns both.
     else if (this.remote) { /* nothing else is available here */ }
@@ -1308,6 +1342,16 @@ export class TUI {
       left: () => this._toggleQuotaBarPercent(),
       right: () => this._toggleQuotaBarPercent(),
       enter: () => this._toggleQuotaBarPercent(),
+    });
+
+    fields.push({
+      id: 'sessionRows',
+      label: 'Session rows',
+      hint: '←→ toggle',
+      value: () => (this.config.sessionRows !== false ? green('on') : gray('off')),
+      left: () => this._toggleSessionRows(),
+      right: () => this._toggleSessionRows(),
+      enter: () => this._toggleSessionRows(),
     });
 
     fields.push({
@@ -2115,6 +2159,17 @@ export class TUI {
     if (this.running) this.render();
   }
 
+  async _toggleSessionRows() {
+    // On unless set to false, so the first toggle from a config without the
+    // key writes `false`: the comparison, not a negation, again.
+    const prev = this.config.sessionRows;
+    const on = prev === false;
+    this.config.sessionRows = on;
+    if (!await this._saveSetting('session rows', () => { this.config.sessionRows = prev; })) return;
+    this._addLog(`Session rows: ${on ? 'on' : 'off'}`);
+    if (this.running) this.render();
+  }
+
   async _toggleQuotaBarPercent() {
     // Absent means off (it is opt-in), so the first toggle from a config that
     // predates the key has to write `true` — hence the comparison rather than a
@@ -2544,6 +2599,8 @@ export class TUI {
       this._renderPick(lines);
     } else if (view === 'blocklist') {
       this._renderBlocklist(lines);
+    } else if (view === 'move') {
+      this._renderMove(lines, W, H - footerH);
     } else {
     // ── Accounts, or the login panel in their place. The activity pane stays
     // under the panel: the sign-in's own progress lines land there.
@@ -2564,6 +2621,11 @@ export class TUI {
       const current = this._currentRows();
       const groups = this._providerGroups();
       const split = groups.length === 2 ? this._splitLayout(groups, W) : null;
+      // The sessions each account is carrying, drawn on a line under its row.
+      // Every such line is one fewer for the activity log below.
+      const sessionRows = this._sessionRowsByAccount();
+      const sessionLine = (/** @type {number|undefined} */ idx, /** @type {number} */ w) =>
+        (idx == null || !sessionRows ? null : this._sessionRowLine(sessionRows.get(idx) || [], w));
       if (split) {
         const [a, b] = groups;
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
@@ -2571,12 +2633,19 @@ export class TUI {
           const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current) : '';
           const right = r < b.indices.length ? this._renderRow(b.indices[r], split.right, current) : '';
           lines.push(fitLine(left, split.leftW) + dim(PANE_GUTTER) + right);
+          const ls = sessionLine(a.indices[r], split.leftW);
+          const rs = sessionLine(b.indices[r], split.rightW);
+          if (ls || rs) lines.push(fitLine(ls || '', split.leftW) + dim(PANE_GUTTER) + (rs || ''));
         }
       } else {
         lines.push('');
         const order = this._displayOrder();
         const layout = this._listLayout(order, W);
-        for (const i of order) lines.push(this._renderRow(i, layout, current));
+        for (const i of order) {
+          lines.push(this._renderRow(i, layout, current));
+          const sl = sessionLine(i, W);
+          if (sl) lines.push(sl);
+        }
       }
     }
 
@@ -2884,6 +2953,268 @@ export class TUI {
       complete: all.every(b => b.complete),
       stages: [0, 1, 2].map(k => Math.max(...all.map(b => b.stages[k]))),
     };
+  }
+
+  /**
+   * The known sessions, newest first, from either manager: the live one
+   * reads its tracker, the attached one the server's `sessions.list`. Titles
+   * come from this process's SessionTitles when the source has none. Never
+   * throws: a frame must not fail on a readout.
+   *
+   * @param {{ maxAgeMs?: number, limit?: number }} [opts]
+   * @returns {{ id: string, title: string|null, account: number|null, accountName: string|null, lastSeen: number, active: boolean, model: string|null, clientPinned: boolean }[]}
+   */
+  _sessionItems({ maxAgeMs = Infinity, limit = Infinity } = {}) {
+    if (typeof this.am.sessionList !== 'function') return [];
+    const titles = this.sessionTitles?.enabled ? this.sessionTitles : null;
+    const title = titles ? (/** @type {string} */ sid) => titles.get(sid) : null;
+    try {
+      return this.am.sessionList({ title, maxAgeMs, limit }) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** What a session is called on screen: its title, else its short id. A row
+   *  taken before its title was read asks the cache again, so the picker fills
+   *  its names in as the reads land rather than keeping the ids it opened with. */
+  _sessionLabel(/** @type {{ id: string, title?: string|null }} */ s) {
+    const title = s.title || (this.sessionTitles?.enabled ? this.sessionTitles.get(s.id) : null);
+    return (title && safeLine(title, 120)) || shortSid(s.id);
+  }
+
+  /**
+   * Account index to the sessions pinned there that made a request within
+   * SESSION_ROW_WINDOW_MS, newest first; null when no row is to be drawn. The
+   * main dashboard only: the select and settings screens keep their layout.
+   * @returns {Map<number, any[]>|null}
+   */
+  _sessionRowsByAccount() {
+    if (this.mode !== 'normal' || this.config?.sessionRows === false) return null;
+    const items = this._sessionItems({ maxAgeMs: SESSION_ROW_WINDOW_MS });
+    if (!items.length) return null;
+    /** @type {Map<number, any[]>} */
+    const by = new Map();
+    for (const s of items) {
+      if (s.account == null) continue;
+      const list = by.get(s.account);
+      if (list) list.push(s); else by.set(s.account, [s]);
+    }
+    return by;
+  }
+
+  /**
+   * One account's session line, at most `width` columns: a dot in the
+   * session's own colour (filled while it is active, hollow after), its
+   * label, and `+N` for the sessions that do not fit. Null when there are none.
+   * @param {any[]} items
+   * @param {number} width
+   */
+  _sessionRowLine(items, width) {
+    if (!items.length) return null;
+    let line = '     ';   // under the account name, clear of the marker columns
+    let shown = 0;
+    for (let i = 0; i < items.length; i++) {
+      const s = items[i];
+      const label = truncate(this._sessionLabel(s), SESSION_ROW_LABEL_W);
+      const dot = fg(sessionColorCode(s.id), s.active ? '●' : '○');
+      const piece = `${shown ? '  ' : ''}${dot} ${s.active ? label : dim(label)}`;
+      const rest = items.length - i - 1;
+      const reserve = rest ? vw(`  +${rest}`) : 0;
+      if (vw(line) + vw(piece) + reserve > width) break;
+      line += piece;
+      shown++;
+    }
+    const hidden = items.length - shown;
+    if (hidden) line += dim(`${shown ? '  ' : ''}+${hidden}`);
+    return line;
+  }
+
+  // ── session move (`m`) ─────────────────────────────
+
+  /** Open the session picker: every known session, newest first, as it stood
+   *  when the key was pressed, so the cursor does not chase a list reordering
+   *  under it with every request. */
+  _openMove() {
+    const items = this._sessionItems();
+    if (!items.length) { this._addLog('No sessions to move'); return; }
+    this.mode = 'move';
+    this.move = { stage: 'session', items, idx: 0, visible: items.length, session: null, accounts: [], aIdx: 0 };
+  }
+
+  _closeMove() {
+    this.move = null;
+    this.mode = 'normal';
+  }
+
+  _keyMove(/** @type {string} */ k) {
+    const mv = this.move;
+    if (!mv) { this.mode = 'normal'; return; }
+    if (k === 'esc' || k === 'q') { this._closeMove(); return; }
+    const up = k === 'up' || k === 'k';
+    const down = k === 'down' || k === 'j';
+    if (mv.stage === 'session') {
+      const n = Math.max(1, Math.min(mv.items.length, mv.visible));
+      if (up) mv.idx = Math.max(0, mv.idx - 1);
+      else if (down) mv.idx = Math.min(n - 1, mv.idx + 1);
+      else if (k === 'enter') this._moveChooseSession(mv.items[mv.idx]);
+      return;
+    }
+    const rows = mv.accounts;
+    if (up || down) {
+      const dir = up ? -1 : 1;
+      for (let j = mv.aIdx + dir; j >= 0 && j < rows.length; j += dir) {
+        if (rows[j].ok) { mv.aIdx = j; break; }
+      }
+    } else if (k === 'enter') {
+      const row = rows[mv.aIdx];
+      if (row?.ok) this._doMoveSession(mv.session, row.idx);
+    }
+  }
+
+  /** The governing weekly utilization of `a` for a request on `model`. */
+  _moveWeekly(/** @type {any} */ a, /** @type {string|null} */ model) {
+    if (typeof this.am._governingWeekly === 'function') return this.am._governingWeekly(a, model);
+    return gatingUtilization(a?.quota, weeklyBucketForModel(model));
+  }
+
+  /** Whether `a` can take a session on `model`. The live manager answers with
+   *  the selector's own predicate; an attached one has the server's
+   *  model-agnostic reason plus the family bucket against its threshold. */
+  _moveAvailable(/** @type {any} */ a, /** @type {string|null} */ model, /** @type {number|null} */ weekly) {
+    if (!a || a.disabled) return false;
+    if (typeof this.am._isAvailable === 'function') return this.am._isAvailable(a, model);
+    if (a.unavailable != null) return false;
+    const threshold = this.am.thresholdFor?.(weeklyBucketForModel(model), a);
+    return !(Number.isFinite(weekly) && Number.isFinite(threshold) && weekly >= threshold);
+  }
+
+  /** Step two: the accounts the chosen session can move to. The cursor starts
+   *  where distribution would send a new session, the least-used weekly window
+   *  (see _rankedWeeklyUsed), passing over the account it is already on. */
+  _moveChooseSession(/** @type {any} */ s) {
+    const mv = this.move;
+    if (!mv || !s) return;
+    if (s.account == null) { this._addLog('That session has not been routed to an account yet'); return; }
+    const home = this.am.accounts[s.account];
+    const provider = home ? providerOf(home) : null;
+    const rows = this._displayOrder().map((/** @type {number} */ idx) => {
+      const a = this.am.accounts[idx];
+      const weekly = this._moveWeekly(a, s.model);
+      const sameProvider = provider == null || providerOf(a) === provider;
+      const rank = typeof this.am._rankedWeeklyUsed === 'function'
+        ? this.am._rankedWeeklyUsed(a, s.model)
+        : (Number.isFinite(weekly) ? weekly : -Infinity);
+      return {
+        idx,
+        ok: sameProvider && this._moveAvailable(a, s.model, weekly),
+        current: idx === s.account,
+        ses: a?.quota?.unified5h ?? null,
+        wk: weekly,
+        rank,
+      };
+    });
+    const elsewhere = rows.filter(r => r.ok && !r.current);
+    let best = null;
+    for (const r of (elsewhere.length ? elsewhere : rows.filter(r => r.ok))) {
+      if (!best || r.rank < best.rank) best = r;
+    }
+    mv.stage = 'account';
+    mv.session = s;
+    mv.accounts = rows;
+    mv.aIdx = best ? rows.indexOf(best) : 0;
+  }
+
+  _doMoveSession(/** @type {any} */ s, /** @type {number} */ idx) {
+    this._closeMove();
+    const acct = this.am.accounts[idx];
+    if (!acct) { this._addLog('That account is no longer listed'); return; }
+    if (idx === s.account) { this._addLog(`Session "${safeLine(this._sessionLabel(s), 60)}" is already on "${safeLine(acct.name, 64)}"`); return; }
+    if (this.applySessionMove) { this._doMoveSessionRemote(s, acct); return; }
+    const res = this.am.moveSession(s.id, idx);
+    if (!res?.ok) { this._addLog(`Move failed: ${res?.error || 'unknown error'}`); return; }
+    const from = res.from == null ? '?' : this.am.accounts[res.from]?.name ?? '?';
+    this._logMoved(s, from, acct.name);
+  }
+
+  /** Attach mode: the session lives in the server's tracker, so the move is
+   *  a request, and the log says what the server answered. */
+  async _doMoveSessionRemote(/** @type {any} */ s, /** @type {any} */ acct) {
+    try {
+      const res = await this.applySessionMove?.(s.id, acct.name);
+      const from = typeof res?.from === 'string' ? res.from : (s.accountName || '?');
+      const to = typeof res?.to === 'string' ? res.to : acct.name;
+      this._logMoved({ ...s, clientPinned: res?.clientPinned === true || s.clientPinned === true }, from, to);
+    } catch (/** @type {any} */ e) {
+      this._addLog(`Move failed: ${e.message}`);
+    }
+    if (this.running) this.render();
+  }
+
+  _logMoved(/** @type {any} */ s, /** @type {string} */ from, /** @type {string} */ to) {
+    const label = safeLine(this._sessionLabel(s), 60);
+    // A client pin (TC_ACCT, `/tc-acct/`) is resolved ahead of the session pin,
+    // so the move is recorded but steers nothing while the client sends it.
+    const warn = s.clientPinned ? yellow(' — but the client pins it with TC_ACCT; the move has no effect') : '';
+    this._addLog(`Moved session "${label}" ${safeLine(from, 64)} → ${safeLine(to, 64)} (applies from its next request)${warn}`);
+  }
+
+  /** The account a session is pinned to, for the picker's arrow column. */
+  _sessionAccountName(/** @type {any} */ s) {
+    if (s.account == null) return '—';
+    return safeLine(this.am.accounts[s.account]?.name ?? s.accountName ?? '?', 64) || '?';
+  }
+
+  /**
+   * The `m` picker. Step one lists sessions, as many as fit and `… N more`
+   * after them (no scrolling: the newest are the ones worth moving); step two
+   * the accounts, an account that cannot take the session struck through.
+   * @param {string[]} lines
+   * @param {number} W
+   * @param {number} bottom the line the footer starts on
+   */
+  _renderMove(lines, W, bottom) {
+    const mv = this.move;
+    if (!mv) return;
+    lines.push('');
+    if (mv.stage === 'session') {
+      lines.push(bold('  Move a session') + dim('  — pick the session, then the account it moves to'));
+      lines.push('');
+      const room = Math.max(1, bottom - lines.length);
+      const visible = mv.items.length <= room ? mv.items.length : Math.max(1, room - 1);
+      mv.visible = visible;
+      if (mv.idx >= visible) mv.idx = visible - 1;
+      const shown = mv.items.slice(0, visible);
+      const nameW = Math.min(28, Math.max(1, ...shown.map((/** @type {any} */ s) => vw(this._sessionAccountName(s)))));
+      const agoW = 7;
+      // Cursor, dot, the arrow, the age, the family and the pin tag around it.
+      const fixed = 7 + 4 + nameW + 2 + agoW + 10 + 11;
+      const titleW = Math.max(8, Math.min(48, W - fixed));
+      shown.forEach((/** @type {any} */ s, /** @type {number} */ i) => {
+        const cur = i === mv.idx;
+        const dot = fg(sessionColorCode(s.id), s.active ? '●' : '○');
+        const title = rpad(truncate(this._sessionLabel(s), titleW), titleW);
+        const acct = rpad(truncate(this._sessionAccountName(s), nameW), nameW);
+        const fam = modelTag(s.model);
+        const pin = s.clientPinned ? `  ${yellow('[TC_ACCT]')}` : '';
+        lines.push(`   ${cur ? cyan('▸') : ' '} ${dot} ${cur ? bold(title) : title}  → ${acct}  ${gray(rpad(formatAgo(s.lastSeen), agoW))}${fam ? `  ${dim(`(${fam})`)}` : ''}${pin}`);
+      });
+      if (visible < mv.items.length) lines.push(dim(`     … ${mv.items.length - visible} more`));
+      return;
+    }
+    const s = mv.session;
+    lines.push(bold(`  Move "${truncate(this._sessionLabel(s), 40)}"`)
+      + dim(`  — now on ${this._sessionAccountName(s)}; applies from its next request`));
+    lines.push('');
+    if (!mv.accounts.some((/** @type {any} */ r) => r.ok)) lines.push(yellow('    No account can take this session right now.'));
+    const nameW = Math.min(32, Math.max(1, ...mv.accounts.map((/** @type {any} */ r) => vw(safeLine(this.am.accounts[r.idx]?.name ?? '?', 64)))));
+    mv.accounts.forEach((/** @type {any} */ r, /** @type {number} */ i) => {
+      const cur = i === mv.aIdx && r.ok;
+      const name = rpad(truncate(safeLine(this.am.accounts[r.idx]?.name ?? '?', 64), nameW), nameW);
+      const body = `${name}  Ses ${pctCell(r.ses)} · Wk ${pctCell(r.wk)}`;
+      const shown = !r.ok ? dim(strike(body)) : cur ? bold(body) : body;
+      lines.push(`   ${cur ? cyan('▸') : ' '} ${shown}${r.current ? dim('  (current)') : ''}`);
+    });
   }
 
   /** Draw one row against a layout from _listLayout. */
@@ -3327,6 +3658,8 @@ export class TUI {
     // ── Quota bars
     lines.push(bold('  Quota bars') + dim('  — what the bar on each account row carries'));
     lines.push(row(byId('quotaBarPercent')));
+    lines.push(row(byId('sessionRows')));
+    lines.push(dim('  Under each account, its sessions that made a request in the last 10 minutes.'));
     lines.push('');
     // ── Activity log
     lines.push(bold('  Activity log') + dim('  — what to do with Claude Code\'s telemetry'));
@@ -3685,8 +4018,12 @@ export class TUI {
     switch (this.mode) {
       case 'normal':
         return this.remote
-          ? ` ${bold('s')}witch  ${bold('R')}eload  ${bold('q')}uit`
-          : ` ${bold('s')}witch  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+          ? ` ${bold('s')}witch  ${bold('m')}ove  ${bold('R')}eload  ${bold('q')}uit`
+          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+      case 'move':
+        return this.move?.stage === 'account'
+          ? ` ${dim('↑↓')} select  ${bold('Enter')} move here  ${bold('Esc')} cancel`
+          : ` ${dim('↑↓')} select  ${bold('Enter')} choose  ${bold('Esc')} cancel`;
       case 'settings':
         return ` ${dim('↑↓')} navigate  ${dim('←→')} change  ${bold('Enter')} edit  ${bold('Esc')} back`;
       case 'routes':

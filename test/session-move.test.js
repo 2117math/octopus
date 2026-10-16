@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import { SessionTracker } from '../src/session-tracker.js';
 import { AccountManager } from '../src/account-manager.js';
 import { createProxyServer } from '../src/server.js';
+import { TUI } from '../src/tui.js';
+import { RemoteAccountManager } from '../src/tui-remote.js';
 
 // Per-session markers and moving a session. A session (one Claude Code
 // conversation, its subagents included) is pinned per weekly bucket and per
-// conversation; a move re-points every one of those pins, and the status
-// payload lists sessions for the operator.
+// conversation; a move re-points every one of those pins, the status payload
+// lists sessions for the operator, and the TUI draws them under their account
+// and moves one with `m`.
 
 const SHARED = 'unified7d';
 const FABLE_BUCKET = 'unified7dFable';
@@ -19,6 +22,8 @@ const SID2 = '3f2a1b9c-1111-4000-8000-000000000002';
 const OTHER = 'aa11bb22-0000-4000-8000-000000000003';
 
 const oauth = (name, extra = {}) => ({ name, type: 'oauth', accessToken: `t-${name}`, refreshToken: 'r', expiresAt: Date.now() + HOUR, ...extra });
+const SGR = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g');
+const plain = s => s.replace(SGR, '');
 
 function fixedClock(start = 1_000_000) {
   const c = { t: start };
@@ -201,4 +206,136 @@ test('POST /teamclaude/session-move refuses an ambiguous or unknown session, and
     assert.equal(tenant.status, 403);
     assert.equal(am.sessionTracker.pinnedAccount(SID, SHARED), 0, 'nothing moved');
   });
+});
+
+// ── TUI ────────────────────────────────────────────────────────
+
+function makeTUI(am, config = {}) {
+  const tui = new TUI({
+    accountManager: am, config: { proxy: { port: 1 }, accounts: [], routes: [], ...config }, sx: null,
+    saveConfig: async () => {}, syncAccounts: async () => 0, onQuit: () => {}, probeQuota: () => {},
+  });
+  return tui;
+}
+
+/** One full frame at 120x30, as plain lines. */
+function frame(tui) {
+  const cols = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
+  const rows = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
+  Object.defineProperty(process.stdout, 'columns', { value: 120, configurable: true });
+  Object.defineProperty(process.stdout, 'rows', { value: 30, configurable: true });
+  let buf = '';
+  try {
+    tui._paint = (b) => { buf = b; };
+    tui.running = true;
+    tui.render({ force: true });
+  } finally {
+    tui.running = false;
+    if (cols) Object.defineProperty(process.stdout, 'columns', cols);
+    else delete process.stdout.columns;
+    if (rows) Object.defineProperty(process.stdout, 'rows', rows);
+    else delete process.stdout.rows;
+  }
+  return plain(buf).split('\r\n');
+}
+
+test('the dashboard draws each account\'s recent sessions under its row', () => {
+  const am = new AccountManager([oauth('a@x.com'), oauth('b@x.com')], 0.98, { distributeSessions: true });
+  am.beginSession(SID, { sessionId: SID, model: OPUS });
+  am.recordSession(SID, 1, OPUS);   // in flight: active
+  am.beginSession(OTHER, { sessionId: OTHER, model: OPUS });
+  am.recordSession(OTHER, 1, OPUS);
+  am.endSession(OTHER);
+  // Idle for a quarter of an hour: past the row's ten-minute window.
+  for (const s of am.sessionTracker.sessions.values()) if (s.sessionId === OTHER) s.lastSeen -= 15 * 60_000;
+  const titles = { enabled: true, width: 18, get: id => (id === SID ? '로그인 버그 고치기' : null) };
+
+  const tui = makeTUI(am);
+  tui.sessionTitles = /** @type {any} */ (titles);
+  const lines = frame(tui);
+  const row = lines.findIndex(l => l.includes('b@x.com'));
+  assert.match(lines[row + 1], /^\s+● 로그인 버그 고치기\s*$/, 'the active session, named, on the line under its account');
+  assert.equal(lines.filter(l => l.includes('aa11bb')).length, 0, 'a session idle past ten minutes is not drawn');
+  assert.doesNotMatch(lines[lines.findIndex(l => l.includes('a@x.com')) + 1], /[●○]/, 'an account with no sessions gets no line');
+
+  const off = makeTUI(am, { sessionRows: false });
+  off.sessionTitles = /** @type {any} */ (titles);
+  assert.equal(frame(off).filter(l => /[●○]/.test(l)).length, 0, 'sessionRows: false draws the old layout');
+
+  // Many sessions on one account: what does not fit is counted, not cut.
+  const many = am.sessionList();
+  const line = tui._sessionRowLine(Array.from({ length: 12 }, (_, i) => ({ ...many[0], id: `${i}`.padStart(8, 'a'), title: `session number ${i}` })), 80);
+  assert.ok(plain(line).length <= 80);
+  assert.match(plain(line), /\+\d+$/);
+});
+
+test('m picks a session, preselects the least-used account, and moves it', () => {
+  const am = new AccountManager([oauth('a@x.com'), oauth('b@x.com'), oauth('c@x.com'), oauth('d@x.com')], 0.98, { distributeSessions: true });
+  const weekly = [0.9, 0.6, 0.2, 0.1];
+  weekly.forEach((w, i) => {
+    am.accounts[i].quota.unified7d = w;
+    am.accounts[i].quota.unified7dReset = Date.now() + 100 * HOUR;
+    am.accounts[i].probing = false;
+  });
+  am.accounts[3].disabled = true;   // the least used, but out of rotation
+  am.beginSession(SID, { sessionId: SID, model: OPUS, clientPinned: true });
+  am.recordSession(SID, 0, OPUS);
+  am.endSession(SID);
+
+  const tui = makeTUI(am);
+  tui.render = () => {};
+  tui._key('m');
+  assert.equal(tui.mode, 'move');
+  assert.equal(tui.move.stage, 'session');
+  tui._key('enter');
+  assert.equal(tui.move.stage, 'account');
+  const at = () => tui.move.accounts[tui.move.aIdx].idx;
+  assert.equal(at(), 2, 'the cursor starts on the selectable account with the least weekly use');
+  assert.equal(tui.move.accounts.find(r => r.idx === 3).ok, false, 'a disabled account cannot be chosen');
+  tui._key('down');
+  assert.equal(at(), 2, 'the cursor does not stop on a struck-through row');
+
+  const lines = [];
+  tui._renderMove(lines, 120, 28);
+  const text = lines.map(plain).join('\n');
+  assert.match(text, /▸ c@x\.com\s+Ses\s+-\s+· Wk\s+20%/);
+  assert.match(lines.map(l => l).join('\n'), /\x1b\[9m/, 'the disabled row is struck through');
+
+  tui._key('enter');
+  assert.equal(tui.mode, 'normal');
+  assert.equal(am.sessionTracker.pinnedAccount(SID, SHARED), 2);
+  assert.match(plain(tui.log[0].msg), /^Moved session "3f2a1b" a@x\.com → c@x\.com \(applies from its next request\) — but the client pins it with TC_ACCT; the move has no effect$/);
+
+  tui._key('m');
+  tui._key('esc');
+  assert.equal(tui.mode, 'normal', 'Esc cancels');
+  assert.equal(am.sessionTracker.pinnedAccount(SID, SHARED), 2);
+});
+
+test('attach mode reads the server\'s session list and sends the move', async () => {
+  const am = new RemoteAccountManager();
+  am.applyStatus({
+    accounts: [{ name: 'a@x.com', quota: { unified7d: 0.5 } }, { name: 'b@x.com', quota: { unified7d: 0.1 } }],
+    sessions: { list: [
+      { id: SID, title: 'Fix\x1b[2J the bug', account: 0, accountName: 'a@x.com', lastSeen: 1000, active: true, model: OPUS, clientPinned: false },
+      { id: 'bad id!', title: 'dropped', account: 0, lastSeen: 1, active: true },
+    ] },
+  });
+  assert.deepEqual(am.sessionList().map(s => s.id), [SID], 'a row whose id is not one is dropped');
+  assert.equal(am.sessionList()[0].title, 'Fix the bug', 'the title is scrubbed');
+
+  const sent = [];
+  const tui = new TUI({
+    accountManager: am, remote: true, config: { proxy: { port: 1 }, accounts: [], routes: [] },
+    saveConfig: async () => {}, syncAccounts: async () => 0, onQuit: () => {},
+    applySessionMove: async (session, account) => { sent.push([session, account]); return { ok: true, from: 'a@x.com', to: account }; },
+  });
+  tui.render = () => {};
+  tui._key('m');
+  tui._key('enter');
+  assert.equal(tui.move.accounts[tui.move.aIdx].idx, 1);
+  tui._key('enter');
+  await new Promise(r => setTimeout(r, 5));
+  assert.deepEqual(sent, [[SID, 'b@x.com']]);
+  assert.match(plain(tui.log[0].msg), /^Moved session "Fix the bug" a@x\.com → b@x\.com/);
 });
