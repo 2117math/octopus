@@ -2732,7 +2732,8 @@ export class TUI {
           if (ls || rs) lines.push(fitLine(ls || '', split.leftW) + dim(PANE_GUTTER) + (rs || ''));
         }
       } else {
-        lines.push('');
+        // The spacer above the list carries the fleet summary when there is one.
+        lines.push(this._fleetLine(W, groups));
         const order = this._displayOrder();
         const layout = this._listLayout(order, W);
         for (const i of order) {
@@ -3439,6 +3440,54 @@ export class TUI {
       if (idx != null) rows.add(idx);
     }
     return rows;
+  }
+
+  /**
+   * One line over the account list summing up the fleet: the average weekly
+   * use of the enabled subscription accounts that report one, and the least
+   * used of them; how many have their five-hour window under half (an empty
+   * window, which the expiry sweep leaves at reset, is unused); and how many
+   * sit at their switch threshold on the five-hour or the weekly window.
+   *
+   * It takes the spacer line the list already has, so nothing below it moves,
+   * and it is that empty spacer, as before, with fewer than two such accounts
+   * or with two providers on screen, whose quotas do not add up. Segments drop
+   * from the end when the terminal is too narrow for them.
+   *
+   * @param {number} W
+   * @param {{ provider: string, indices: number[] }[]} groups
+   * @returns {string}
+   */
+  _fleetLine(W, groups) {
+    if (groups.length !== 1) return '';
+    const accts = this.am.accounts.filter((/** @type {any} */ a) => a && !a.disabled && isSubscriptionAccount(a));
+    if (accts.length < 2) return '';
+    const num = (/** @type {unknown} */ v) => typeof v === 'number' && Number.isFinite(v);
+    const pct = (/** @type {number} */ v) => `${Math.round(v * 100)}%`;
+    const thFor = (/** @type {string} */ k, /** @type {any} */ a) =>
+      (typeof this.am.thresholdFor === 'function' ? this.am.thresholdFor(k, a) : this.am.switchThreshold);
+    const segs = [];
+    const weekly = accts.filter((/** @type {any} */ a) => num(a.quota?.unified7d));
+    if (weekly.length) {
+      const avg = weekly.reduce((/** @type {number} */ s, /** @type {any} */ a) => s + a.quota.unified7d, 0) / weekly.length;
+      const low = weekly.reduce((/** @type {any} */ m, /** @type {any} */ a) => (a.quota.unified7d < m.quota.unified7d ? a : m));
+      segs.push(`Wk avg ${pct(avg)} ${dim(`(lowest ${safeLine(low.name, 40)} ${pct(low.quota.unified7d)})`)}`);
+    }
+    const under = accts.filter((/** @type {any} */ a) => !num(a.quota?.unified5h) || a.quota.unified5h < 0.5).length;
+    segs.push(`5h: ${under}/${accts.length} under 50%`);
+    const atLimit = accts.filter((/** @type {any} */ a) => {
+      const q = a.quota || {};
+      const at = (/** @type {string} */ k) => num(q[k]) && num(thFor(k, a)) && q[k] >= thFor(k, a);
+      return at('unified5h') || at('unified7d');
+    }).length;
+    segs.push(atLimit ? red(`${atLimit} at limit`) : dim('0 at limit'));
+    const head = ` ${bold('Fleet')}  `;
+    while (segs.length) {
+      const line = head + segs.join(dim('  ·  '));
+      if (vw(line) <= W - 1) return line;
+      segs.pop();
+    }
+    return '';
   }
 
   _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null } = {}) {
