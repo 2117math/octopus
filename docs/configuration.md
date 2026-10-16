@@ -103,7 +103,7 @@ While the config is being rewritten — by the server rotating a refresh token, 
 
 ## Environment variables
 
-Every `TEAMCLAUDE_*` variable below is also read under the name `TEAMROUTER_*`, which wins when both are set — the project is [being renamed](../README.md#renaming-to-teamrouter), and the old spelling keeps working throughout.
+Every `TEAMCLAUDE_*` variable below is also read under the name `TEAMROUTER_*`, which wins when both are set.
 
 | Variable | Effect |
 | --- | --- |

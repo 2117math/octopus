@@ -32,4 +32,3 @@
 
 ## 알려진 사항
 - 원본(Windows)에서도 실패하는 테스트 19개: service, alias 경로, crash-log, 활동 로그 0600, MITM h2 취소 등 POSIX 전제 테스트.
-- warmer의 claude.exe 경로는 `node_modules` 안에 설치됐을 때만 맞는다. 클론에서 실행하면 `claude`로 대체된다.

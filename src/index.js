@@ -2838,9 +2838,6 @@ Environment:
   TEAMCLAUDE_CONFIG   Path to the config file (default below)
   TEAMCLAUDE_DISABLE_AUTOUPDATE=1
                       Skip the background self-update check
-  Every TEAMCLAUDE_* variable is also read as TEAMROUTER_*, which wins when
-  both are set: the project is being renamed to TeamRouter, and 'teamrouter'
-  already runs this same CLI. See github.com/KarpelesLab/teamclaude/issues/72.
 
 The server always accepts both base-URL and proxy/CONNECT clients, so instances
 launched with and without --no-mitm can share one server.
@@ -2898,7 +2895,7 @@ A global npm install self-updates in the background (checked once/day, applied
 on the next launch). Disable with TEAMCLAUDE_DISABLE_AUTOUPDATE=1 or
 "autoUpdate": false in the config.
 
-Config: ${getConfigPath()} (a ~/.config/teamrouter.json is used when it exists)
+Config: ${getConfigPath()}
 Crash log: ${getCrashLogPath()} (server; written when the process dies unexpectedly)
 `);
 }

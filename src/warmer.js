@@ -39,12 +39,17 @@ export function warmApplicable(/** @type {any} */ account) {
   return account.type === 'oauth' && !account.upstream && providerOf(account) === 'anthropic';
 }
 
-// [local patch] Windows: no claude.exe on PATH (only the claude.cmd shim),
-// so resolve the sibling global install's exe; fall back to 'claude'.
+// [local patch] Windows: no claude.exe on PATH (only the claude.cmd shim), so
+// look for the global install's exe: first beside this package (works when it
+// sits in the same node_modules), then in the APPDATA npm global folder. Else plain 'claude'.
 function resolveClaudeCommand() {
   if (process.platform !== 'win32') return 'claude';
-  const exe = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../@anthropic-ai/claude-code/bin/claude.exe');
-  return existsSync(exe) ? exe : 'claude';
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(here, '../../../@anthropic-ai/claude-code/bin/claude.exe'),
+    path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+  ];
+  return candidates.find((p) => existsSync(p)) || 'claude';
 }
 const CLAUDE_COMMAND = resolveClaudeCommand();
 

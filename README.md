@@ -88,10 +88,6 @@ Step-by-step lifecycle: [docs/routing.md](docs/routing.md#request-lifecycle).
 | [Compliance](docs/compliance.md) | Who the project is for, and terms of service notes for each provider |
 | [Contributing](CONTRIBUTING.md) | What is in scope, and what a pull request needs |
 
-## Renaming to TeamRouter
-
-TeamClaude is becoming **TeamRouter** — it pools Codex and third-party accounts as well as Claude ones, and the name should say so. The rename is spread over several releases so that nothing installed, scripted or configured breaks; the plan and its progress are in [issue #72](https://github.com/KarpelesLab/teamclaude/issues/72). As of this release the new name is *accepted* everywhere while the old one stays canonical: `teamrouter` runs the same CLI as `teamclaude`, every `TEAMCLAUDE_*` variable is also read as `TEAMROUTER_*`, every `/teamclaude/…` control route also answers at `/teamrouter/…`, and a `~/.config/teamrouter.json` is used when it exists. Nothing on an existing install needs to change, now or when the default flips.
-
 ## Security
 
 Octopus is a local fork and is not published anywhere. The canonical sources for the upstream project are its repository (https://github.com/KarpelesLab/teamclaude) and the [`@karpeleslab/teamclaude`](https://www.npmjs.com/package/@karpeleslab/teamclaude) npm package.
