@@ -13,7 +13,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { readFile as nodeReadFile } from 'node:fs/promises';
 import { safeLine } from './safe-text.js';
 
-export const HOST_SAMPLE_MS = 30_000;
+export const HOST_SAMPLE_MS = 60_000; // a PowerShell sample costs ~4 s of work on Windows; once a minute is plenty for a status line
 export const HOG_CPU_PCT = 90;
 export const HOG_AFTER_MS = 10 * 60_000;
 const SAMPLE_TIMEOUT_MS = 10_000;
