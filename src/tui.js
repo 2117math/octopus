@@ -125,6 +125,47 @@ function modelTag(model) {
 // A utilization as a fixed-width whole percentage, '-' when unreported.
 const pctCell = v => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '-').padStart(4);
 
+// A session's colour as a background (SESSION_FG + 10) with a text colour that
+// stays readable on it: white on the dark blue and magenta, black on the rest.
+const sessionBg = code => `${code + 10};${code === 34 || code === 35 ? 97 : 30}`;
+// Most runs the account name is split into. Past this many sessions the last
+// run stands for the rest, which the session line's `+N` counts.
+const NAME_RUNS_MAX = 4;
+
+/**
+ * The account name cell, `w` columns, with the colours of the sessions pinned
+ * to the account running under it: one session paints the whole cell, several
+ * split it into equal runs left to right, newest first, the first run taking
+ * the leftover columns. The split is in display columns; a wide glyph on a
+ * boundary stays whole in the run it starts in, and the next run gives the
+ * column back. Each run ends in a reset, so nothing bleeds into the type cell.
+ * @param {string} name
+ * @param {number} w
+ * @param {{ id: string }[]} sessions newest first, at least one
+ */
+function sessionNameCell(name, w, sessions) {
+  const text = rpad(strip(truncate(name, w)), w);
+  const n = Math.min(NAME_RUNS_MAX, sessions.length, Math.max(1, w));
+  const base = Math.floor(w / n);
+  // Where each run ends, counted from the start of the cell.
+  const ends = Array.from({ length: n }, (_, i) => base * (i + 1) + (w - base * n));
+  let out = '';
+  let run = '';
+  let seg = 0;
+  let used = 0;
+  const flush = () => {
+    if (run) out += `${ESC}${sessionBg(sessionColorCode(sessions[seg].id))}m${run}${RESET}`;
+    run = '';
+  };
+  for (const ch of text) {
+    if (seg < n - 1 && used >= ends[seg]) { flush(); seg++; }
+    run += ch;
+    used += vw(ch);
+  }
+  flush();
+  return out;
+}
+
 // Which quota-family bar (F7/S7) a route binds to, or null for a general route.
 // Auto routes are named 'fable'/'sonnet'; a configured route is classified by its
 // globs so e.g. `*fable*` sits next to the F7 bar.
@@ -2621,17 +2662,18 @@ export class TUI {
       const current = this._currentRows();
       const groups = this._providerGroups();
       const split = groups.length === 2 ? this._splitLayout(groups, W) : null;
-      // The sessions each account is carrying, drawn on a line under its row.
-      // Every such line is one fewer for the activity log below.
+      // The sessions each account is carrying: their colours run under its
+      // name, and on the main dashboard a line under the row names them. Every
+      // such line is one fewer for the activity log below.
       const sessionRows = this._sessionRowsByAccount();
       const sessionLine = (/** @type {number|undefined} */ idx, /** @type {number} */ w) =>
-        (idx == null || !sessionRows ? null : this._sessionRowLine(sessionRows.get(idx) || [], w));
+        (idx == null || !sessionRows || this.mode !== 'normal' ? null : this._sessionRowLine(sessionRows.get(idx) || [], w));
       if (split) {
         const [a, b] = groups;
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
         for (let r = 0; r < Math.max(a.indices.length, b.indices.length); r++) {
-          const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current) : '';
-          const right = r < b.indices.length ? this._renderRow(b.indices[r], split.right, current) : '';
+          const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current, sessionRows) : '';
+          const right = r < b.indices.length ? this._renderRow(b.indices[r], split.right, current, sessionRows) : '';
           lines.push(fitLine(left, split.leftW) + dim(PANE_GUTTER) + right);
           const ls = sessionLine(a.indices[r], split.leftW);
           const rs = sessionLine(b.indices[r], split.rightW);
@@ -2642,7 +2684,7 @@ export class TUI {
         const order = this._displayOrder();
         const layout = this._listLayout(order, W);
         for (const i of order) {
-          lines.push(this._renderRow(i, layout, current));
+          lines.push(this._renderRow(i, layout, current, sessionRows));
           const sl = sessionLine(i, W);
           if (sl) lines.push(sl);
         }
@@ -2985,12 +3027,13 @@ export class TUI {
 
   /**
    * Account index to the sessions pinned there that made a request within
-   * SESSION_ROW_WINDOW_MS, newest first; null when no row is to be drawn. The
-   * main dashboard only: the select and settings screens keep their layout.
+   * SESSION_ROW_WINDOW_MS, newest first; null when sessionRows is off or no
+   * session qualifies. The name colours follow it on every screen that draws
+   * the rows; the line under a row is the main dashboard's only (see _render).
    * @returns {Map<number, any[]>|null}
    */
   _sessionRowsByAccount() {
-    if (this.mode !== 'normal' || this.config?.sessionRows === false) return null;
+    if (this.config?.sessionRows === false) return null;
     const items = this._sessionItems({ maxAgeMs: SESSION_ROW_WINDOW_MS });
     if (!items.length) return null;
     /** @type {Map<number, any[]>} */
@@ -3218,9 +3261,9 @@ export class TUI {
   }
 
   /** Draw one row against a layout from _listLayout. */
-  _renderRow(/** @type {number} */ idx, /** @type {any} */ L, /** @type {Set<number>} */ current) {
+  _renderRow(/** @type {number} */ idx, /** @type {any} */ L, /** @type {Set<number>} */ current, /** @type {Map<number, any[]>|null} */ sessions = null) {
     const b = L.budgets.get(rowCategory(this.am.accounts[idx]));
-    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar });
+    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar, sessions: sessions?.get(idx) || null });
   }
 
   /** The accounts of each provider present, in the order its rows are drawn. */
@@ -3346,7 +3389,7 @@ export class TUI {
     return rows;
   }
 
-  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true } = {}) {
+  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null } = {}) {
     const a = this.am.accounts[idx];
     const isCur = current.has(idx);
     const isSel = this.mode === 'select' && idx === this.selIdx;
@@ -3398,7 +3441,11 @@ export class TUI {
     // when it drops a wide glyph that would straddle it, so rpad finishes the
     // cell.
     const rawName = rpad(truncate(a.name, nameW), nameW);
-    const name = isSel ? bold(rawName) : rawName;
+    // The colours of the sessions pinned here run under the name; the cursor's
+    // bold name wins on the selected row.
+    const name = isSel ? bold(rawName)
+      : sessions?.length ? sessionNameCell(a.name, nameW, sessions)
+      : rawName;
 
     // Type — or the provider, once the pool serves more than one.
     //

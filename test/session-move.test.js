@@ -218,8 +218,8 @@ function makeTUI(am, config = {}) {
   return tui;
 }
 
-/** One full frame at 120x30, as plain lines. */
-function frame(tui) {
+/** One full frame at 120x30, as plain lines (or as painted, with `raw`). */
+function frame(tui, { raw = false } = {}) {
   const cols = Object.getOwnPropertyDescriptor(process.stdout, 'columns');
   const rows = Object.getOwnPropertyDescriptor(process.stdout, 'rows');
   Object.defineProperty(process.stdout, 'columns', { value: 120, configurable: true });
@@ -236,7 +236,7 @@ function frame(tui) {
     if (rows) Object.defineProperty(process.stdout, 'rows', rows);
     else delete process.stdout.rows;
   }
-  return plain(buf).split('\r\n');
+  return (raw ? buf : plain(buf)).split('\r\n');
 }
 
 test('the dashboard draws each account\'s recent sessions under its row', () => {
@@ -267,6 +267,35 @@ test('the dashboard draws each account\'s recent sessions under its row', () => 
   const line = tui._sessionRowLine(Array.from({ length: 12 }, (_, i) => ({ ...many[0], id: `${i}`.padStart(8, 'a'), title: `session number ${i}` })), 80);
   assert.ok(plain(line).length <= 80);
   assert.match(plain(line), /\+\d+$/);
+});
+
+test('the colours of an account\'s sessions run under its name, split between them', () => {
+  const am = new AccountManager([oauth('a@x.com'), oauth('b@x.com')], 0.98, { distributeSessions: true });
+  // Two sessions on b, newest last; a carries none.
+  for (const id of [OTHER, SID]) {
+    am.beginSession(id, { sessionId: id, model: OPUS });
+    am.recordSession(id, 1, OPUS);
+    am.endSession(id);
+  }
+  for (const s of am.sessionTracker.sessions.values()) if (s.sessionId === OTHER) s.lastSeen -= 1000;
+  const tui = makeTUI(am);
+  const nameW = tui._listLayout(tui._displayOrder(), 120).nameW;
+  const lines = frame(tui, { raw: true });
+  // The row by its text: the runs split the name, so the painted line holds it in pieces.
+  const rowOf = name => lines[lines.findIndex(l => plain(l).includes(name))];
+  // A background run: a 4x/10x code with its text colour, up to its reset.
+  const RUN = new RegExp(String.fromCharCode(27) + '\\[(4[0-7]|10[0-7]);(30|97)m([^' + String.fromCharCode(27) + ']*)' + String.fromCharCode(27) + '\\[0m', 'g');
+  const runs = [...rowOf('b@x.com').matchAll(RUN)];
+  assert.equal(runs.length, 2, 'one run per session');
+  assert.notEqual(runs[0][1], runs[1][1], 'each in its own session colour');
+  const cell = runs.map(m => m[3]).join('');
+  assert.equal(cell.length, nameW, 'together they cover the whole name cell');
+  assert.equal(cell.trimEnd(), 'b@x.com', 'and the name itself is unchanged');
+  assert.equal(runs[0][3].length, Math.ceil(nameW / 2), 'the newest session takes the first half and the odd column');
+  assert.equal([...rowOf('a@x.com').matchAll(RUN)].length, 0, 'no session, no background');
+
+  const off = makeTUI(am, { sessionRows: false });
+  assert.equal(frame(off, { raw: true }).filter(l => RUN.test(l)).length, 0, 'sessionRows: false paints no background');
 });
 
 test('m picks a session, preselects the least-used account, and moves it', () => {
