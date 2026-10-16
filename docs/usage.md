@@ -128,6 +128,8 @@ octopus move "login bug" me@example.com   # by part of its title or the start of
 
 `octopus move` refuses a match that names more than one session and lists the candidates. Both commands use the control plane. `GET /teamclaude/status` carries the list as `sessions.list`: at most 100 rows, newest first, each with `id`, `title`, `account`, `accountName`, `lastSeen` (ms ago), `active`, `model` and `clientPinned`. `POST /teamclaude/session-move` takes `{"session": "<id or its start>", "account": "<name, email or index>"}` and answers `{"ok": true, "session": ..., "from": ..., "to": ...}`; an ambiguous session is a `400` with the candidates, an unknown session or account a `404`. A request with a `proxy.clientKeys` key gets no list and is refused the move with `403`, since a session title names someone's work. `octopus attach` reads the same list and moves with **m** as well.
 
+One session at a time, for a status line: `octopus whoami <session-id>` (or `--session <id>`, or `CLAUDE_SESSION_ID` in the environment) prints the account it is on, as `mimath0626 (active, fable, 2m ago)`; `--json` prints the reply whole. It reads `GET /teamclaude/session?id=<uuid>`, which answers `{"id", "title", "account", "accountName", "color", "active", "lastSeen", "model", "clientPinned"}`, where `color` is the SGR foreground code the dashboard paints the session in. An id that is not a UUID is a `400`, an unknown session a `404`, and a `proxy.clientKeys` key is refused with `403`, as for the list.
+
 The proxy can make that move itself. With `rebalanceSessions.enabled` on (`octopus rebalance on`, or **g** → **Idle rebalance**), a pinned session that comes back after `idleSeconds` (default 300) without a request has lost its prompt cache anyway. If its account's weekly use is at least `gap` (default `0.10`) above the account a new session would get, the session moves there, every pin of it, and the activity log says `Rebalanced session "<title>" <from> → <to> (idle 7m, 48% → 31%)`. It needs `distributeSessions` on, and leaves a session alone while another of its requests is in flight or while its client pins an account with `TC_ACCT`. `octopus rebalance 600` sets the idle time (at least 60) and switches it on; `octopus rebalance off` switches it off. Off by default.
 
 ### TUI keyboard shortcuts
@@ -224,6 +226,7 @@ octopus service install   # Run the proxy as a login service (uninstall/status/p
 octopus switch [name]     # Prefer an account; no name lists them (needs server)
 octopus sessions          # List the sessions the server knows (needs server)
 octopus move <s> <acct>   # Move one session to another account (needs server)
+octopus whoami <id>       # The account one session is on (needs server)
 octopus remove <name>     # Remove an account (by name or email)
 octopus disable <name>    # Temporarily exclude an account from rotation
 octopus enable <name>     # Re-enable it (also clears a stuck error state)

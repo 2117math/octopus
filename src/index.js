@@ -43,7 +43,7 @@ import { SxManager } from './sx.js';
 import { autoUpdate, checkForUpdate, currentVersion, resolveVersionLabel, runUpdate, installKind, updateAvailableFromCache, PKG_NAME } from './updater.js';
 import { renderStatus, formatPercent } from './status-renderer.js';
 import { sanitizeText, safeLine } from './safe-text.js';
-import { modelLabel } from './model.js';
+import { modelLabel, modelFamily } from './model.js';
 import { ClientUsageTracker, UsageDimensionTracker } from './client-usage.js';
 import { buildClaudeEnvLines, bypassesAllHosts, clearSelfProxyEnvLines, encodePinComponent, LOCAL_LOGIN_HINT_WINDOW_MS, localLoginHint, mergeNoProxy, resolveClientMode } from './claude-env.js';
 import { serviceKind, installService, uninstallService, serviceStatus, renderService, logPath } from './service.js';
@@ -223,6 +223,10 @@ switch (command) {
     break;
   case 'move':
     await moveCommand();
+    process.exit(0);
+    break;
+  case 'whoami':
+    await whoamiCommand();
     process.exit(0);
     break;
   case 'remove':
@@ -2031,6 +2035,57 @@ async function moveCommand() {
   if (data.clientPinned === true) console.error('Warning: the client pins this session with TC_ACCT; the move has no effect.');
 }
 
+// The account one session is on, from GET /teamclaude/session: what a status
+// line shows. The id comes from the argument, --session, or CLAUDE_SESSION_ID.
+async function whoamiCommand() {
+  const config = await loadOrCreateConfig();
+  const port = config.proxy.port;
+  const flag = args.indexOf('--session');
+  const positional = args[1] && !args[1].startsWith('-') ? args[1] : '';
+  const id = (flag !== -1 ? args[flag + 1] || '' : positional || process.env.CLAUDE_SESSION_ID || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    console.error('Usage: octopus whoami [<session-id> | --session <session-id>] [--json]');
+    console.error('  The id is a Claude Code session UUID; without one, CLAUDE_SESSION_ID is used.');
+    process.exit(1);
+  }
+  let data = null;
+  let status = 0;
+  try {
+    const res = await fetch(`http://localhost:${port}/teamclaude/session?id=${encodeURIComponent(id)}`, {
+      // Not kept alive: see fetchSessionList.
+      headers: { 'x-api-key': config.proxy.apiKey, connection: 'close' },
+      signal: AbortSignal.timeout(5_000),
+    });
+    status = res.status;
+    data = await res.json().catch(() => null);
+  } catch (err) {
+    console.error('Cannot connect to proxy at localhost:' + port);
+    console.error('Is the server running? Start with: octopus server');
+    if (/** @type {any} */ (err)?.message) console.error(`Details: ${/** @type {any} */ (err).message}`);
+    process.exit(1);
+  }
+  if (status !== 200 || !data || typeof data.id !== 'string') {
+    const said = typeof data?.error === 'string' ? data.error : '';
+    if (status === 404 && said.startsWith('no known session')) {
+      console.error(`The server knows no session ${id.slice(0, 8)}… (one is forgotten an hour after its last request).`);
+    } else if (status === 404) {
+      console.error('The server does not answer /teamclaude/session: it predates this command (restart it).');
+    } else {
+      console.error(said ? safeLine(said, 200) : `Unexpected reply from localhost:${port} (HTTP ${status}).`);
+    }
+    process.exit(1);
+  }
+  if (args.includes('--json')) {
+    await writeStdout(`${JSON.stringify(data, null, 2)}\n`);
+    return;
+  }
+  const family = modelFamily(data.model);
+  const model = typeof data.model === 'string' ? (family === 'other' ? safeLine(data.model, 32) : family) : '-';
+  const name = data.accountName == null ? '(no account yet)' : safeLine(data.accountName, 64);
+  const pinned = data.clientPinned === true ? ' [TC_ACCT]' : '';
+  console.log(`${name} (${data.active ? 'active' : 'idle'}, ${model}, ${agoText(data.lastSeen)})${pinned}`);
+}
+
 // ── accounts ────────────────────────────────────────────────
 
 async function accountsCommand() {
@@ -3005,6 +3060,9 @@ Commands:
                       Move one session onto another account (as 'm' in the TUI
                       does); <session> is part of its title or the start of its
                       id. Applies from the session's next request
+  whoami [<id>|--session <id>] [--json]
+                      Show the account one session is on, e.g. for a status
+                      line; the id defaults to CLAUDE_SESSION_ID
   remove <name>       Remove an account (by name or email; --org to disambiguate)
   disable <name>      Temporarily exclude an account from rotation
   enable <name>       Re-enable a disabled account (also clears a stuck error)

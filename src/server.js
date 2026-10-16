@@ -19,6 +19,7 @@ import { tunnelTls } from './sx.js';
 import { createEgressGuard } from './egress-guard.js';
 import { isRoutingFailure, describeRouting } from './account-routing.js';
 import { safeLine } from './safe-text.js';
+import { sessionColorCode } from './session-color.js';
 import { forwardRefusal, guardedLookup, FORBIDDEN_FORWARD } from './forward-target.js';
 import { renderDashboardHtml, dashboardCsp } from './dashboard.js';
 import { createUsageRecorder, resolveUsageDimensions, usageDimensionHeaderNames } from './client-usage.js';
@@ -897,6 +898,52 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         return;
       }
 
+      // One session, by its full id: the account it is on, for a status line
+      // (`octopus whoami`, a Claude Code statusLine script) that knows its own
+      // session id and wants to show which account serves it. Answers
+      // {id, title, account, accountName, color, active, lastSeen, model,
+      // clientPinned}; `color` is the SGR foreground code the TUI paints the
+      // session in. Operator callers only, like `sessions.list`: a title is the
+      // subject of someone's conversation. The id must be a UUID, which is what
+      // Claude Code sends, so nothing else is looked up or echoed back.
+      if (req.method === 'GET' && (req.url || '').split('?')[0] === '/teamclaude/session') {
+        const reply = (code, body) => {
+          res.writeHead(code, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        if (req.tcClient) {
+          reply(403, { error: 'a client key cannot read sessions' });
+          return;
+        }
+        if (typeof accountManager.sessionList !== 'function') {
+          reply(501, { error: 'session lookup not supported' });
+          return;
+        }
+        let id = '';
+        try { id = new URL(req.url || '', 'http://localhost').searchParams.get('id') || ''; } catch { id = ''; }
+        if (!SESSION_UUID.test(id)) {
+          reply(400, { error: 'missing or malformed "id" (a session UUID)' });
+          return;
+        }
+        const session = accountManager.sessionList({ title: hooks.sessionTitle ?? null }).find(s => s.id === id);
+        if (!session) {
+          reply(404, { error: 'no known session with that id' });
+          return;
+        }
+        reply(200, {
+          id: session.id,
+          title: session.title,
+          account: session.account,
+          accountName: session.accountName == null ? null : safeLine(session.accountName, 64),
+          color: sessionColorCode(session.id),
+          active: session.active,
+          lastSeen: session.lastSeen,
+          model: session.model == null ? null : safeLine(session.model, 64),
+          clientPinned: session.clientPinned,
+        });
+        return;
+      }
+
       // Threshold endpoint — the utilization at which rotation leaves an
       // account, the web equivalent of `teamclaude threshold <1-100>` and of the
       // set_threshold MCP tool. Unlike /switch, which only moves currentIndex in
@@ -1453,6 +1500,8 @@ export function clientPassthroughOrigin({ authority, url, config, accounts = [] 
 // cap is what bounds that map per client) and a column in the TUI, where Node's
 // header parser would otherwise let C1 control bytes through untouched.
 const SESSION_ID_SHAPE = /^[A-Za-z0-9._-]{1,128}$/;
+// The one shape GET /teamclaude/session looks up: Claude Code's session id.
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Most rows `sessions.list` carries in a status reply. The attached TUI polls
 // status every second, so the list is capped rather than sized by the tracker,

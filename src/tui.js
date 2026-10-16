@@ -20,6 +20,7 @@ import { sanitizeText, safeLine } from './safe-text.js';
 // all read them from there, so they cannot drift apart (#426).
 import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
 import { rebalanceSetting } from './account-manager.js';
+import { sessionColorCode } from './session-color.js';
 import { isLocalUpstream } from './provider.js';
 import { hyperlink, clipboardSequence } from './osc.js';
 /** @typedef {import('./login-flow.js').LoginPrompt} LoginPrompt */
@@ -76,16 +77,9 @@ const routeColorFn = name => {
   return code ? (s => fg(code, s)) : cyan;
 };
 
-// Per-session coloring for the activity log: a stable color derived from the
-// session id lets you tell concurrent sessions apart at a glance. Palette avoids
-// red (error) and gray (timestamps); includes bright variants for separation.
-const SESSION_FG = [36, 35, 34, 33, 94, 95, 96, 93, 92];
+// Per-session coloring for the activity log: SESSION_FG and sessionColorCode
+// live in session-color.js, shared with GET /teamclaude/session.
 const SESSION_ID_LEN = 6; // first 6 hex chars — plenty to distinguish a handful
-function sessionColorCode(sid) {
-  let h = 0;
-  for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) >>> 0;
-  return SESSION_FG[h % SESSION_FG.length];
-}
 // Fixed-width colored session label: the name Claude Code holds on disk for the
 // session (see session-titles.js), else the short id. Blank-padded when there's
 // no session (e.g. a telemetry request). One width for every row, named or not,
