@@ -19,6 +19,7 @@
 // exactly the account we want to warm.
 
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -386,11 +387,15 @@ export class Warmer {
       : account.accountUuid || account.name;
     const pin = encodePinComponent(identity);
     const baseUrl = `http://127.0.0.1:${this.port}/tc-acct/${pin}`;
+    // A session id of our own, registered before the run so the tracker keeps
+    // this run out of seat counts and session lists.
+    const sessionId = randomUUID();
+    this.am?.sessionTracker?.markWarm?.(sessionId);
     return {
       command: CLAUDE_COMMAND,
       // `--bare -p`: minimal, non-interactive, auth strictly via ANTHROPIC_API_KEY
       // (which this proxy strips and replaces with the pinned account's token).
-      args: ['-p', '--bare', '--model', this.model, '--output-format', 'text', this.prompt],
+      args: ['-p', '--bare', '--model', this.model, '--session-id', sessionId, '--output-format', 'text', this.prompt],
       env: {
         ...process.env,
         ANTHROPIC_BASE_URL: baseUrl,

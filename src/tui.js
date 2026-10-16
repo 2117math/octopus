@@ -1089,8 +1089,10 @@ export class TUI {
   // render path: this returns what is cached and schedules the rest.
   _sessionTag(sid) {
     const titles = this.sessionTitles;
-    if (!titles?.enabled) return sessionTag(sid);
-    return sessionTag(sid, titles.get(sid), this._sessionTagWidth());
+    // [local patch] A keep-warm run has no title; say what it is.
+    const warm = sid && this.am?.sessionTracker?.isWarm?.(sid) ? 'warm' : null;
+    if (!titles?.enabled) return sessionTag(sid, warm);
+    return sessionTag(sid, titles.get(sid) || warm, this._sessionTagWidth());
   }
 
   /** Whether activity rows use the compact format (see compactPathTag). Read

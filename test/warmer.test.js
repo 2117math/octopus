@@ -87,7 +87,9 @@ test('the spawn invocation is a minimal non-interactive claude pinned to the acc
   const spec = spawn.calls[0];
   // [Octopus local patch] on Windows the command may be the resolved claude.exe path.
   assert.match(spec.command, /^claude$|claude[.]exe$/);
-  assert.deepEqual(spec.args, ['-p', '--bare', '--model', 'haiku', '--output-format', 'text', 'hi']);
+  // [Octopus local patch] each run carries its own --session-id so the tracker can hide it.
+  assert.match(spec.args[5], /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual(spec.args, ['-p', '--bare', '--model', 'haiku', '--session-id', spec.args[5], '--output-format', 'text', 'hi']);
   assert.equal(spec.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9999/tc-acct/solo');
   assert.equal(spec.env.ANTHROPIC_API_KEY, 'tc-secret');
 });

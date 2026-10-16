@@ -67,6 +67,11 @@ export const MAX_KEY_LENGTH = MAX_SESSION_ID_LENGTH + 1 + 22;
 // threads it never continues; the oldest id goes first. An id is an upstream
 // message id, a few dozen characters, so one longer than the bound is no id.
 export const MAX_THREAD_MESSAGES = 32;
+
+// [local patch] Client session ids the keep-warm scheduler minted for its own
+// `claude -p` runs. They are real sessions on the wire but nobody's work, so
+// they stay out of seat counts and session lists. Bounded; oldest drops first.
+export const MAX_WARM_SESSIONS = 1000;
 const MAX_MESSAGE_ID_LENGTH = 128;
 
 // The shape a client session id has to have before an operator command may
@@ -182,6 +187,25 @@ export class SessionTracker {
     this.activeTtlMs = activeTtlMs ?? SESSION_ACTIVE_TTL_MS;
     this._now = now || (() => Date.now());
     this._lastSweep = 0;
+    // [local patch] warm client session id -> when it was marked.
+    this.warm = new Map();
+  }
+
+  // [local patch] Mark a client session id as a keep-warm run. Call before the
+  // run's first request so it never counts as a seat.
+  markWarm(sessionId, now = this._now()) {
+    if (typeof sessionId !== 'string' || !sessionId) return;
+    this.warm.delete(sessionId);
+    this.warm.set(sessionId, now);
+    while (this.warm.size > MAX_WARM_SESSIONS) this.warm.delete(this.warm.keys().next().value);
+  }
+
+  // [local patch] Whether a conversation key (or a bare client session id)
+  // belongs to a keep-warm run.
+  isWarm(key) {
+    if (!this.warm.size) return false;
+    const sid = clientSessionOf(key);
+    return sid != null && this.warm.has(sid);
   }
 
   // Record that `sessionId` made a request served by `accountIndex`, spending
@@ -674,7 +698,7 @@ export class SessionTracker {
     // seat taken there, not five.
     const seen = new Set();
     for (const [key, s] of this.sessions) {
-      if (this._isExpired(s, now)) continue;
+      if (this._isExpired(s, now) || this.isWarm(key)) continue;
       // The pin itself, however old within the known window: _pinsInclude is
       // the ACTIVE test (a pin touched in the last two minutes) and would drop
       // the resting session this count exists to keep seated.
@@ -693,7 +717,7 @@ export class SessionTracker {
   // "goes back and forth" between two accounts.
   siblingAccounts(key, now = this._now()) {
     const sid = clientSessionOf(key);
-    if (!sid) return [];
+    if (!sid || this.isWarm(sid)) return [];
     const pins = [];
     for (const [k, s] of this.sessions) {
       if (k === key || clientSessionOf(k) !== sid || this._isExpired(s, now)) continue;
@@ -829,6 +853,7 @@ export class SessionTracker {
     const groups = new Map();
     for (const [key, s] of this.sessions) {
       if (this._isExpired(s, now)) { this.sessions.delete(key); continue; }
+      if (this.isWarm(key)) continue;
       const id = s.sessionId || key;
       let g = groups.get(id);
       if (!g) {
@@ -877,6 +902,16 @@ export class SessionTracker {
     for (const [id, s] of this.sessions) {
       if (this._isExpired(s, now)) this.sessions.delete(id);
     }
+    // [local patch] Forget a warm id once nothing of it is left and it is older
+    // than the known window; one marked a moment ago has not made its first
+    // request yet and must stay marked.
+    if (this.warm.size) {
+      const live = new Set();
+      for (const key of this.sessions.keys()) live.add(clientSessionOf(key));
+      for (const [sid, at] of this.warm) {
+        if (!live.has(sid) && now - at > this.knownTtlMs) this.warm.delete(sid);
+      }
+    }
   }
 
   // { known, active, perAccount: { [index]: activeCount }, perAccountBucket, tokens }
@@ -922,13 +957,16 @@ export class SessionTracker {
         this.sessions.delete(id);
         continue;
       }
-      known += 1;
-      if (items) items.push(sessionItem(id, s, this._isActive(s, now)));
+      // [local patch] Keep-warm runs spend tokens (summed below) but are not
+      // sessions anyone works in: no seat, no row, no load.
+      const warm = this.isWarm(id);
+      if (!warm) known += 1;
+      if (items && !warm) items.push(sessionItem(id, s, this._isActive(s, now)));
       // A pin remains useful for the whole known hour even after it stops
       // counting as live load. Attribute that quieter population separately so
       // status can distinguish an idle session from no observed session at all.
       const knownAccounts = new Set([...s.pins.values()].map(pin => pin.idx));
-      for (const idx of knownAccounts) knownPerAccount[idx] = (knownPerAccount[idx] || 0) + 1;
+      if (!warm) for (const idx of knownAccounts) knownPerAccount[idx] = (knownPerAccount[idx] || 0) + 1;
       for (const [bucket, t] of s.tokens) {
         const per = byBucket[bucket] || (byBucket[bucket] = emptyAggregate());
         for (const k of COUNTERS) {
@@ -936,7 +974,7 @@ export class SessionTracker {
           per[k] += t[k];
         }
       }
-      if (this._isActive(s, now)) {
+      if (!warm && this._isActive(s, now)) {
         active += 1;
         if (s.starved > starvedMax) starvedMax = s.starved;
         // Once per account, on every account this session is currently
