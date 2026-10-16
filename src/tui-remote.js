@@ -3,6 +3,7 @@ import { SessionTitles } from './session-titles.js';
 import { modelGlobMatches, resolveSwitchThreshold } from './model.js';
 import { safeLine } from './safe-text.js';
 import { providerOf } from './provider.js';
+import { normalizeHostSnapshot } from './host-stats.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
 // Attach mode — the dashboard against a server running somewhere else (a
@@ -228,6 +229,9 @@ export class RemoteAccountManager {
     // The server's `sessions.list`, cleaned (see applyStatus). Kept apart from
     // `sessions`, whose shape the dashboard compares structurally.
     this.sessionItems = [];
+    // The server's host snapshot for the Host line, cleaned; null when it
+    // sent none (an older server, or one without a TUI).
+    this.host = null;
     this.connected = false;   // false ⇒ the view is a stale snapshot
     this.lastError = null;
     this.status = null;
@@ -333,6 +337,7 @@ export class RemoteAccountManager {
         model: s.model == null ? null : text(s.model, 64) || null,
         clientPinned: s.clientPinned === true,
       }));
+    this.host = normalizeHostSnapshot(status?.host);
     this.distributeSessions = !!sessions.distribute;
     // A server too old to send `mode` still reports `distribute`, so fall back
     // to the behaviour that flag alone used to mean rather than showing 'off'.

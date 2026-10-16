@@ -614,6 +614,13 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         if (!req.tcClient && status.sessions && typeof accountManager.sessionList === 'function') {
           status.sessions.list = accountManager.sessionList({ title: hooks.sessionTitle ?? null, limit: SESSION_LIST_LIMIT });
         }
+        // The host's memory and busiest processes (host-stats.js), which the
+        // attached TUI's Host line draws. Operator callers only, like the list
+        // above: process names say what else runs on this machine.
+        if (!req.tcClient && hooks.hostSnapshot) {
+          const host = hooks.hostSnapshot();
+          if (host) status.host = host;
+        }
         const extra = hooks.getStatusExtra?.() || {};
         res.writeHead(200, { 'Content-Type': 'application/json' });
         // Counters only: how full the upstream admission gate is (see

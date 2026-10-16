@@ -62,6 +62,7 @@ const yellow = s => fg(33, s);
 const red = s => fg(31, s);
 const cyan = s => fg(36, s);
 const gray = s => fg(90, s);
+const orange = s => fg('38;5;208', s);
 
 // Named foreground colors selectable per route (config `color`). Bright variants
 // let a user distinguish several routes at a glance.
@@ -534,6 +535,49 @@ export function fitLine(s, w) {
   return s;
 }
 
+const GIB = 1024 ** 3;
+
+/**
+ * The Host line (see host-stats.js), at most `width - 1` columns, or '' when
+ * the snapshot has no memory figures or nothing fits:
+ * `Host  RAM 71% (8.9 GB free · 3.9 GB compressed)  ·  CPU  find 100%  …`.
+ * The RAM figure takes the quota bars' four colours by the share in use; a
+ * process flagged as a hog is red with a `!`. A narrow line drops the CPU
+ * entries from the end first, then the compressed and free figures.
+ * @param {any} snap a HostStats snapshot
+ * @param {number} width
+ */
+export function formatHostLine(snap, width) {
+  const total = snap?.totalBytes;
+  const free = snap?.freeBytes;
+  if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(free) || free < 0) return '';
+  const used = Math.min(1, Math.max(0, 1 - free / total));
+  const paint = used < 0.5 ? green : used < 0.75 ? yellow : used < 0.9 ? orange : red;
+  const ram = `RAM ${paint(`${Math.round(used * 100)}%`)}`;
+  const gb = (/** @type {number} */ b) => `${(b / GIB).toFixed(1)} GB`;
+  const freeText = `${gb(Math.min(free, total))} free`;
+  const comp = snap.compressedBytes;
+  const compText = Number.isFinite(comp) && comp > 0 ? `${gb(comp)} compressed` : null;
+  const procs = (Array.isArray(snap.top) ? snap.top : [])
+    .map((/** @type {any} */ p) => {
+      const name = typeof p?.name === 'string' ? safeLine(p.name, 32) : '';
+      if (!name || !Number.isFinite(p?.cpuPct)) return null;
+      const item = `${name} ${Math.round(p.cpuPct)}%`;
+      return p.hog === true ? red(`${item}!`) : item;
+    })
+    .filter(Boolean);
+  const head = ` ${bold('Host')}  `;
+  const compose = (/** @type {number} */ n, /** @type {boolean} */ withComp, /** @type {boolean} */ withFree) => {
+    const detail = [withFree && freeText, withComp && compText].filter(Boolean).join(' · ');
+    const cpu = n > 0 ? `${dim('  ·  ')}CPU  ${procs.slice(0, n).join('  ')}` : '';
+    return `${head}${ram}${detail ? ` ${dim(`(${detail})`)}` : ''}${cpu}`;
+  };
+  const tries = [];
+  for (let n = procs.length; n >= 0; n--) tries.push(compose(n, true, true));
+  tries.push(compose(0, false, true), compose(0, false, false));
+  return tries.find(line => vw(line) <= width - 1) || '';
+}
+
 /** A pane's title, `w` columns wide: the label, then a rule to the pane's edge. */
 function paneTitle(/** @type {string} */ label, /** @type {number} */ w) {
   return fitLine(` ${bold(label)} ${dim('─'.repeat(Math.max(1, w - vw(label) - 2)))}`, w);
@@ -839,6 +883,9 @@ export class TUI {
     // In attach mode the account manager carries the server's own answer and
     // these are unused; the empty defaults keep the label hidden until it does.
     versionLabel = '', updateAvailable = false,
+    // The Host line's sampler (host-stats.js). Absent, the line reads the
+    // account manager's `host` (attach mode), or is not drawn.
+    hostStats = null,
     // Read for TMUX when the login panel copies its link. Injectable so the
     // tmux wrapping can be exercised without running inside tmux.
     env = /** @type {Record<string, string | undefined>} */ (process.env) }) {
@@ -864,6 +911,7 @@ export class TUI {
     this.sessionTitles = sessionTitles;
     this.versionLabel = versionLabel;
     this.updateAvailable = updateAvailable;
+    this.hostStats = hostStats;
 
     this.log = [];           // completed activity entries
     this.active = new Map(); // in-flight requests
@@ -1453,6 +1501,16 @@ export class TUI {
       left: () => this._toggleSessionRows(),
       right: () => this._toggleSessionRows(),
       enter: () => this._toggleSessionRows(),
+    });
+
+    fields.push({
+      id: 'hostLine',
+      label: 'Host line',
+      hint: '←→ toggle',
+      value: () => (this.config.hostLine !== false ? green('on') : gray('off')),
+      left: () => this._toggleHostLine(),
+      right: () => this._toggleHostLine(),
+      enter: () => this._toggleHostLine(),
     });
 
     fields.push({
@@ -2330,6 +2388,16 @@ export class TUI {
     if (this.running) this.render();
   }
 
+  async _toggleHostLine() {
+    // On unless set to false, like the sessions panel.
+    const prev = this.config.hostLine;
+    const on = prev === false;
+    this.config.hostLine = on;
+    if (!await this._saveSetting('host line', () => { this.config.hostLine = prev; })) return;
+    this._addLog(`Host line: ${on ? 'on' : 'off'}`);
+    if (this.running) this.render();
+  }
+
   async _toggleQuotaBarPercent() {
     // Absent means off (it is opt-in), so the first toggle from a config that
     // predates the key has to write `true` — hence the comparison rather than a
@@ -2786,6 +2854,8 @@ export class TUI {
       const sessionRows = this._sessionRowsByAccount();
       if (split) {
         const [a, b] = groups;
+        const host = this._hostLine(W);
+        if (host) lines.push(host);
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
         for (let r = 0; r < Math.max(a.indices.length, b.indices.length); r++) {
           const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current, sessionRows) : '';
@@ -2795,6 +2865,8 @@ export class TUI {
       } else {
         // The spacer above the list carries the fleet summary when there is one.
         lines.push(this._fleetLine(W, groups));
+        const host = this._hostLine(W);
+        if (host) lines.push(host);
         const order = this._displayOrder();
         const layout = this._listLayout(order, W);
         for (const i of order) {
@@ -3572,6 +3644,19 @@ export class TUI {
     return '';
   }
 
+  /**
+   * The Host line under the fleet line: this process's sampler when it has
+   * one, else the snapshot the server sent (attach mode). '' when hostLine is
+   * off or there is nothing to show. Never waits on a sample.
+   * @param {number} W
+   */
+  _hostLine(W) {
+    if (this.config?.hostLine === false) return '';
+    let snap = null;
+    try { snap = this.hostStats ? this.hostStats.snapshot() : (this.am.host ?? null); } catch { snap = null; }
+    return formatHostLine(snap, W);
+  }
+
   _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null } = {}) {
     const a = this.am.accounts[idx];
     const isCur = current.has(idx);
@@ -3891,8 +3976,13 @@ export class TUI {
     // ── Quota bars
     lines.push(bold('  Quota bars') + dim('  — what the bar on each account row carries'));
     lines.push(row(byId('quotaBarPercent')));
+    lines.push('');
+    // ── Dashboard
+    lines.push(bold('  Dashboard') + dim('  — what is drawn around the account list'));
     lines.push(row(byId('sessionRows')));
     lines.push(dim('  A panel under the accounts listing each known session and its account.'));
+    lines.push(row(byId('hostLine')));
+    lines.push(dim('  Memory in use and the busiest processes, under the fleet line.'));
     lines.push('');
     // ── Activity log
     lines.push(bold('  Activity log') + dim('  — what to do with Claude Code\'s telemetry'));

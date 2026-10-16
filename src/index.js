@@ -53,6 +53,7 @@ import { parseRoutingUrl, routingToUrl, describeRouting, checkRouting } from './
 import { proxyFetch } from './upstream-fetch.js';
 import { upstreamFor } from './provider.js';
 import { startEventLoopMonitor } from './event-loop-monitor.js';
+import { HostStats } from './host-stats.js';
 import { envVar } from './brand.js';
 import { loginCallback, loadCallbackToken, saveCallbackToken, callbackWhoami, logoutCallback, callbackClientId, getCallbackAuthPath } from './callback-auth.js';
 import { CredentialSync, refreshOutsideProxy } from './credential-sync.js';
@@ -646,6 +647,8 @@ async function serverCommand() {
     config.activityFormat = diskConfig.activityFormat === 'compact' ? 'compact' : 'full';
     // The same, for the Sessions panel; on unless set to false.
     config.sessionRows = diskConfig.sessionRows !== false;
+    // The Host line, the same way; on unless set to false.
+    config.hostLine = diskConfig.hostLine !== false;
     config.accountSort = ACCOUNT_SORTS.includes(diskConfig.accountSort) ? diskConfig.accountSort : 'arranged';
     // Read by `run`/`env` from disk, but the TUI settings screen shows it live.
     config.defaultClientMode = diskConfig.defaultClientMode === 'base-url' ? 'base-url' : 'mitm';
@@ -727,10 +730,13 @@ async function serverCommand() {
   let tui = null;
   /** @type {Record<string, any>} */
   let hooks = {};
+  // The Host line's sampler: with the TUI only, and idle while the line is off.
+  // The status payload carries its snapshot for an attached dashboard.
+  const hostStats = useTUI ? new HostStats({ enabled: () => config.hostLine !== false }) : null;
 
   if (useTUI) {
     tui = new TUI({
-      accountManager, config, sx, activityLogPath, sessionTitles, versionLabel, updateAvailable,
+      accountManager, config, sx, activityLogPath, sessionTitles, versionLabel, updateAvailable, hostStats,
       saveConfig: () => atomicConfigUpdate(async diskConfig => {
         mergeAccountsOnto(diskConfig);
         // Persist sx.org settings (set/cleared from the TUI settings screen).
@@ -746,6 +752,7 @@ async function serverCommand() {
         if (config.quotaBarPercent != null) diskConfig.quotaBarPercent = config.quotaBarPercent;
         if (config.activityFormat != null) diskConfig.activityFormat = config.activityFormat;
         if (config.sessionRows != null) diskConfig.sessionRows = config.sessionRows;
+        if (config.hostLine != null) diskConfig.hostLine = config.hostLine;
         if (config.rebalanceSessions != null) diskConfig.rebalanceSessions = config.rebalanceSessions;
         if (config.accountSort != null) diskConfig.accountSort = config.accountSort;
         if (config.defaultClientMode != null) diskConfig.defaultClientMode = config.defaultClientMode;
@@ -801,6 +808,10 @@ async function serverCommand() {
       onRequestRouted: (id, info) => tui.onRequestRouted(id, info),
       onRequestEnd: (id, info) => tui.onRequestEnd(id, info),
     };
+  }
+  if (hostStats) {
+    hostStats.start();
+    hooks.hostSnapshot = () => hostStats.snapshot();
   }
 
   // In headless mode, wire activity-log writes directly via hooks + console.
@@ -1062,6 +1073,7 @@ async function serverCommand() {
     if (!tui) console.log('\n[Octopus] Shutting down...');
     prober?.stop();
     warmer?.stop();
+    hostStats?.stop();
     credentialSync.stop();
     eventLoopMonitor.stop();
     if (quotaSaveInterval) clearInterval(quotaSaveInterval);
