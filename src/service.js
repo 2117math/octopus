@@ -156,7 +156,7 @@ export function renderSystemdUnit({ node, entry, path, configPath = null }) {
   const environment = [`Environment=${systemdQuote(`PATH=${path}`)}`];
   if (configPath) environment.push(`Environment=${systemdQuote(`TEAMCLAUDE_CONFIG=${configPath}`)}`);
   return `[Unit]
-Description=TeamClaude multi-account Claude proxy
+Description=Octopus multi-account Claude proxy
 Documentation=https://github.com/KarpelesLab/teamclaude
 After=network-online.target
 
@@ -200,8 +200,8 @@ export async function installService({
     run('launchctl', ['bootout', `${guiDomain()}/${LABEL}`]);
     const boot = run('launchctl', ['bootstrap', guiDomain(), plist]);
     if (boot.code !== 0) return { ok: false, error: boot.stderr.trim() || `launchctl bootstrap exited ${boot.code}`, file: plist };
-    log(`[TeamClaude] Service installed: ${plist}`);
-    log(`[TeamClaude] Logs: ${logFile}`);
+    log(`[Octopus] Service installed: ${plist}`);
+    log(`[Octopus] Logs: ${logFile}`);
     return { ok: true, file: plist, logFile };
   }
 
@@ -211,11 +211,11 @@ export async function installService({
   run('systemctl', ['--user', 'daemon-reload']);
   const enable = run('systemctl', ['--user', 'enable', '--now', UNIT_NAME]);
   if (enable.code !== 0) return { ok: false, error: enable.stderr.trim() || `systemctl exited ${enable.code}`, file: unit };
-  log(`[TeamClaude] Service installed: ${unit}`);
-  log('[TeamClaude] Logs: journalctl --user --unit teamclaude.service --follow');
+  log(`[Octopus] Service installed: ${unit}`);
+  log('[Octopus] Logs: journalctl --user --unit teamclaude.service --follow');
   // Without lingering the unit dies with the last login session, which is not
   // what "install a service" is expected to mean.
-  log('[TeamClaude] To keep it running with no session open: loginctl enable-linger $USER');
+  log('[Octopus] To keep it running with no session open: loginctl enable-linger $USER');
   return { ok: true, file: unit, logFile: null };
 }
 
@@ -228,14 +228,14 @@ export async function uninstallService({
     const plist = launchAgentPath(home);
     run('launchctl', ['bootout', `${guiDomain()}/${LABEL}`]);
     await rm(plist, { force: true });
-    log(`[TeamClaude] Service removed: ${plist}`);
+    log(`[Octopus] Service removed: ${plist}`);
     return { ok: true, file: plist };
   }
   const unit = systemdUnitPath(home, xdgConfig);
   run('systemctl', ['--user', 'disable', '--now', UNIT_NAME]);
   await rm(unit, { force: true });
   run('systemctl', ['--user', 'daemon-reload']);
-  log(`[TeamClaude] Service removed: ${unit}`);
+  log(`[Octopus] Service removed: ${unit}`);
   return { ok: true, file: unit };
 }
 

@@ -666,6 +666,9 @@ test('scenario: a week of drift ends with windows finished, not fragmented', () 
 test('scenario: even mode is unchanged by the presence of adaptive', () => {
   // The original behaviour must be bit-for-bit what it was: one session each.
   const am = mgr(['a', 'b', 'c'], { distributeSessions: true });
+  // [Octopus local patch] least-weekly-used ranks ahead of sessions; neutralize
+  // it here so the test still checks the session-spreading term it is about.
+  am._rankedWeeklyUsed = () => 0;
   weekly(am, 0, 0.20);
   weekly(am, 1, 0.45);
   weekly(am, 2, 0.88);

@@ -62,7 +62,7 @@ test('routing with no account prints usage and fails', async () => {
   const configPath = await writeConfig([{ name: 'a@example.com', type: 'apikey', apiKey: 'k1' }]);
   const res = await runCli(configPath, ['routing']);
   assert.equal(res.code, 1);
-  assert.match(res.stderr, /Usage: teamclaude routing/);
+  assert.match(res.stderr, /Usage: octopus routing/);
 });
 
 test('routing <name> shows the fleet path when the account has none', async () => {

@@ -64,7 +64,7 @@ const ACCOUNT_ARGS = {
 // running process, and a client should be told what is running.
 const SERVER_INFO = { name: 'teamclaude', version: currentVersion() || 'unknown' };
 
-const INSTRUCTIONS = 'Manages a running TeamClaude proxy: the fleet of upstream accounts it rotates across, their quota, and the settings that steer rotation. Read get_status before changing anything that names an account.';
+const INSTRUCTIONS = 'Manages a running Octopus proxy: the fleet of upstream accounts it rotates across, their quota, and the settings that steer rotation. Read get_status before changing anything that names an account.';
 
 /**
  * What `proxy.mcp` allows: 'read', 'full', or null for off. Anything but the
@@ -215,7 +215,7 @@ async function changeAccount(ctx, args, mutate) {
   } catch (err) {
     // The fleet has already changed; a plain "failed" would send the caller
     // away believing nothing happened, and the next restart would prove it wrong.
-    console.error('[TeamClaude] MCP: saving an account change failed:', err instanceof Error ? err.message : err);
+    console.error('[Octopus] MCP: saving an account change failed:', err instanceof Error ? err.message : err);
     throw new ToolFailure(`${name}: changed in the running server, but the config file could not be saved; see the proxy log`);
   }
   return { account: name, persisted: entryIndex >= 0 };
@@ -238,7 +238,7 @@ async function changeSetting({ hooks }, apply) {
     if (!hooks.reload) throw new Error('this server has no reload hook');
     await hooks.reload();
   } catch (err) {
-    console.error('[TeamClaude] MCP: reload after a settings change failed:', err instanceof Error ? err.message : err);
+    console.error('[Octopus] MCP: reload after a settings change failed:', err instanceof Error ? err.message : err);
     throw new ToolFailure('saved to the config file, but the reload failed; see the proxy log');
   }
   return /** @type {T} */ (outcome);
@@ -472,7 +472,7 @@ const WRITE_TOOLS = [
   {
     name: 'set_client_mode',
     title: 'Set default client mode',
-    description: 'How `teamclaude run` and `teamclaude env` point Claude Code at the proxy by default: "mitm" (an HTTPS forward proxy with a local CA, which also catches hardcoded endpoints) or "base-url" (ANTHROPIC_BASE_URL only). Read by the next run; the server itself is unaffected.',
+    description: 'How `octopus run` and `octopus env` point Claude Code at the proxy by default: "mitm" (an HTTPS forward proxy with a local CA, which also catches hardcoded endpoints) or "base-url" (ANTHROPIC_BASE_URL only). Read by the next run; the server itself is unaffected.',
     properties: { mode: { type: 'string', enum: ['mitm', 'base-url'] } },
     required: ['mode'],
     write: true,
@@ -515,13 +515,13 @@ let writesPending = 0;
 function settleWithin(pending, ms, toolName) {
   return new Promise(resolve => {
     const timer = setTimeout(() => {
-      console.error(`[TeamClaude] MCP ${toolName} did not finish within ${ms} ms; later writes no longer wait for it`);
+      console.error(`[Octopus] MCP ${toolName} did not finish within ${ms} ms; later writes no longer wait for it`);
       resolve({ content: [{ type: 'text', text: `${toolName} did not finish within ${Math.round(ms / 1000)}s; see the proxy log` }], isError: true });
     }, ms);
     /** @type {(value: Record<string, any>) => void} */
     const done = value => { clearTimeout(timer); resolve(value); };
     pending.then(done, err => {
-      console.error(`[TeamClaude] MCP ${toolName} failed:`, err instanceof Error ? err.message : err);
+      console.error(`[Octopus] MCP ${toolName} failed:`, err instanceof Error ? err.message : err);
       done({ content: [{ type: 'text', text: `${toolName} failed; see the proxy log` }], isError: true });
     });
   });
@@ -573,7 +573,7 @@ export function createToolSet(mode, ctx, { writeTimeoutMs = WRITE_TIMEOUT_MS, wr
   const audit = (tool, args, outcome) => {
     // auditArgs masks what must not reach the log (a proxy password in a routing URL).
     const shown = tool.auditArgs ? tool.auditArgs(args) : args;
-    console.log(`[TeamClaude] MCP ${tool.name} by ${caller}${outcome}: ${sanitizeText(JSON.stringify(shown)).slice(0, 300)}`);
+    console.log(`[Octopus] MCP ${tool.name} by ${caller}${outcome}: ${sanitizeText(JSON.stringify(shown)).slice(0, 300)}`);
   };
 
   /** @type {(tool: Tool, args: Record<string, any>) => Promise<Record<string, any>>} */
@@ -594,7 +594,7 @@ export function createToolSet(mode, ctx, { writeTimeoutMs = WRITE_TIMEOUT_MS, wr
       } else {
         // Ours, not the caller's: the detail goes to the log, as the other
         // control endpoints do with a failure that may name paths or accounts.
-        console.error(`[TeamClaude] MCP ${tool.name} failed:`, err instanceof Error ? err.message : err);
+        console.error(`[Octopus] MCP ${tool.name} failed:`, err instanceof Error ? err.message : err);
         text = `${tool.name} failed; see the proxy log`;
       }
       return { content: [{ type: 'text', text }], isError: true };

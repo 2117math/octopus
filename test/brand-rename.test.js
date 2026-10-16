@@ -104,7 +104,7 @@ test('the control plane answers under /teamrouter/ exactly as under /teamclaude/
     for (const path of ['/teamrouter/reload', '/teamrouter/statuss', '/teamrouter', '/teamrouter/', '/%74eamrouter/reload']) {
       const { status, body } = await request(port, path);
       assert.equal(status, 404, path);
-      assert.match(JSON.parse(body).error, /unknown teamclaude control route/, path);
+      assert.match(JSON.parse(body).error, /unknown octopus control route/, path);
     }
     assert.equal(upstreamHits, 0, 'nothing was forwarded');
 

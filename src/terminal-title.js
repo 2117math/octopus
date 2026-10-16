@@ -24,7 +24,7 @@ function truncate(s, max) {
 export function formatTerminalTitle({ index = 0, total = 0, name = null } = {}) {
   const pos = total > 0 ? `${index + 1}/${total}` : '0/0';
   const who = name ? ` ${truncate(name, 24)}` : '';
-  return `teamclaude ${pos}${who}`;
+  return `octopus ${pos}${who}`;
 }
 
 // Wrap a title string in the OSC set-title sequence, stripping control chars so a

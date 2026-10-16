@@ -19,6 +19,9 @@
 // exactly the account we want to warm.
 
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { encodePinComponent } from './claude-env.js';
 import { providerOf } from './provider.js';
 import {
@@ -35,6 +38,16 @@ const SCHEDULE_TIMER_GRACE_MS = 60_000;
 export function warmApplicable(/** @type {any} */ account) {
   return account.type === 'oauth' && !account.upstream && providerOf(account) === 'anthropic';
 }
+
+// [local patch] Windows: no claude.exe on PATH (only the claude.cmd shim),
+// so resolve the sibling global install's exe; fall back to 'claude'.
+function resolveClaudeCommand() {
+  if (process.platform !== 'win32') return 'claude';
+  const exe = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../@anthropic-ai/claude-code/bin/claude.exe');
+  return existsSync(exe) ? exe : 'claude';
+}
+const CLAUDE_COMMAND = resolveClaudeCommand();
+
 
 export class Warmer {
   /**
@@ -127,10 +140,10 @@ export class Warmer {
       if (!wasOn) this.warmAll().catch(() => {});
       this.timer = setInterval(() => this.warmAll().catch(() => {}), intervalMs);
       this.timer.unref?.();
-      this.log(`[TeamClaude] Keep-warm enabled (every ${Math.round(intervalMs / 1000)}s)`);
+      this.log(`[Octopus] Keep-warm enabled (every ${Math.round(intervalMs / 1000)}s)`);
     } else if (wasOn) {
       this.nextRunAt = null;
-      this.log('[TeamClaude] Keep-warm disabled');
+      this.log('[Octopus] Keep-warm disabled');
     }
   }
 
@@ -173,7 +186,7 @@ export class Warmer {
     }, delay);
     this.timer = timer;
     this.timer.unref?.();
-    this.log(`[TeamClaude] Keep-warm scheduled for ${this.scheduleStatus.nextWarmupAt}`);
+    this.log(`[Octopus] Keep-warm scheduled for ${this.scheduleStatus.nextWarmupAt}`);
   }
 
   stop() {
@@ -304,7 +317,7 @@ export class Warmer {
     }, delay);
     this._deferredWarmups.set(account, timer);
     timer.unref?.();
-    this.log(`[TeamClaude] Keep-warm delaying "${account.name}" until ${new Date(runAt).toISOString()} (5h reset within 2m)`);
+    this.log(`[Octopus] Keep-warm delaying "${account.name}" until ${new Date(runAt).toISOString()} (5h reset within 2m)`);
   }
 
   _clearDeferredWarmups() {
@@ -369,7 +382,7 @@ export class Warmer {
     const pin = encodePinComponent(identity);
     const baseUrl = `http://127.0.0.1:${this.port}/tc-acct/${pin}`;
     return {
-      command: 'claude',
+      command: CLAUDE_COMMAND,
       // `--bare -p`: minimal, non-interactive, auth strictly via ANTHROPIC_API_KEY
       // (which this proxy strips and replaces with the pinned account's token).
       args: ['-p', '--bare', '--model', this.model, '--output-format', 'text', this.prompt],

@@ -178,7 +178,7 @@ test('a 200 from something that is not this control plane is not a switch', asyn
       },
     },
   });
-  await assert.rejects(() => control.switchAccount('alpha'), /not a teamclaude control endpoint/);
+  await assert.rejects(() => control.switchAccount('alpha'), /not an octopus control endpoint/);
 });
 
 test('a rejection reported with 200 is still a rejection', async (t) => {
@@ -290,7 +290,7 @@ test('a reply that is not a status payload is a connection problem, not an empty
   });
   await session.poll();
   assert.equal(am.connected, false);
-  assert.match(tui.log[0].msg, /not a teamclaude status endpoint/);
+  assert.match(tui.log[0].msg, /not an octopus status endpoint/);
   assert.deepEqual(am.accounts, []);
 });
 
@@ -437,7 +437,7 @@ test('on loopback a 401 blames the port, not the key the server never checks', a
   const local = await fakeServer(t, { 'GET /teamclaude/status': unauthorized });
   await assert.rejects(
     () => new RemoteControl({ port: local.port, host: '127.0.0.1', apiKey: 'k' }).status(),
-    /something other than teamclaude/i,
+    /something other than octopus/i,
   );
   // A non-loopback server DOES gate on the key, so there the key is the suspect.
   const remote = new RemoteControl({

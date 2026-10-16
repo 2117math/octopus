@@ -71,5 +71,5 @@ test('rename without a new name prints usage and fails', async () => {
   const configPath = await writeConfig();
   const res = await runCli(configPath, ['rename', 'a@example.com']);
   assert.equal(res.code, 1);
-  assert.match(res.stderr, /Usage: teamclaude rename/);
+  assert.match(res.stderr, /Usage: octopus rename/);
 });

@@ -101,7 +101,7 @@ test('an out-of-range percentage is refused without touching the config', async 
   for (const bad of ['0', '101', 'abc']) {
     const res = await runCli(configPath, ['threshold', bad]);
     assert.equal(res.code, 1, `${bad}: ${res.stderr}`);
-    assert.match(res.stderr, /Usage: teamclaude threshold/);
+    assert.match(res.stderr, /Usage: octopus threshold/);
   }
   assert.equal(await readFile(configPath, 'utf8'), before, 'a refused set must not write the config');
 });
@@ -121,6 +121,6 @@ test('mixing a bare number with a bucket assignment is refused', async () => {
   const before = await readFile(configPath, 'utf8');
   const res = await runCli(configPath, ['threshold', '90', 'unified7d=80']);
   assert.equal(res.code, 1, res.stderr);
-  assert.match(res.stderr, /Usage: teamclaude threshold/);
+  assert.match(res.stderr, /Usage: octopus threshold/);
   assert.equal(await readFile(configPath, 'utf8'), before);
 });

@@ -51,7 +51,7 @@ export class RemoteControl {
     // Anything else answered on this port is not this control plane, and calling
     // that "connected with no accounts" would diagnose the wrong problem.
     if (!Array.isArray(payload?.accounts)) {
-      throw new Error('unexpected reply — this is not a teamclaude status endpoint');
+      throw new Error('unexpected reply — this is not an octopus status endpoint');
     }
     return payload;
   }
@@ -93,7 +93,7 @@ export class RemoteControl {
    */
   async _action(method, path, body) {
     const payload = await this._call(method, path, body);
-    if (payload?.ok !== true) throw new Error('unexpected reply — this is not a teamclaude control endpoint');
+    if (payload?.ok !== true) throw new Error('unexpected reply — this is not an octopus control endpoint');
     return payload;
   }
 
@@ -136,7 +136,7 @@ export class RemoteControl {
       const auth = !answered && (res.status === 401 || res.status === 403);
       const err = /** @type {CodedError} */ (new Error(auth
         ? (LOOPBACK_HOSTS.has(this.host)
-          ? `something other than teamclaude is answering on port ${this.port} (HTTP ${res.status})`
+          ? `something other than octopus is answering on port ${this.port} (HTTP ${res.status})`
           : `the server rejected the proxy API key (HTTP ${res.status})`)
         : answered ? text(payload.error, 200, `HTTP ${res.status}`) : `HTTP ${res.status}`));
       err.status = res.status;

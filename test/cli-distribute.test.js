@@ -97,6 +97,6 @@ test('an unknown argument is refused without touching the config', async () => {
   const before = await readFile(configPath, 'utf8');
   const res = await runCli(configPath, ['distribute', 'maybe']);
   assert.equal(res.code, 1, res.stderr);
-  assert.match(res.stderr, /Usage: teamclaude distribute/);
+  assert.match(res.stderr, /Usage: octopus distribute/);
   assert.equal(await readFile(configPath, 'utf8'), before);
 });

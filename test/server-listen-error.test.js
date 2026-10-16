@@ -70,7 +70,7 @@ test('server exits cleanly when configured port is already in use', async () => 
     const result = await runServer(configPath);
     assert.equal(result.code, 1);
     assert.match(result.stderr, new RegExp(`Port ${port} is already in use`));
-    assert.match(result.stderr, /teamclaude status/);
+    assert.match(result.stderr, /octopus status/);
     assert.doesNotMatch(result.stderr, /Unhandled 'error' event/);
   } finally {
     await close(occupied);

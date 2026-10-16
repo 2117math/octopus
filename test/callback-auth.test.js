@@ -390,7 +390,7 @@ function runCli(configPath, base, cliArgs) {
   });
 }
 
-test('teamclaude callback: login prints the URL and saves the token, status names the user, logout forgets', async (t) => {
+test('octopus callback: login prints the URL and saves the token, status names the user, logout forgets', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'teamclaude-callback-cli-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = join(dir, 'config.json');
@@ -428,5 +428,5 @@ test('teamclaude callback: login prints the URL and saves the token, status name
 
   const bad = await runCli(configPath, api.base, ['frobnicate']);
   assert.equal(bad.code, 1);
-  assert.match(bad.stderr, /Usage: teamclaude callback login/);
+  assert.match(bad.stderr, /Usage: octopus callback login/);
 });

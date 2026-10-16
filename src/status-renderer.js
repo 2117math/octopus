@@ -29,7 +29,7 @@ export function renderStatus(status, { color = process.stdout.isTTY, now = Date.
   // the `>` marker follow the sessions; see formatActive for why the modes differ.
   const adaptiveMode = status.sessions?.mode === 'adaptive';
 
-  lines.push(paint.bold('TeamClaude status'));
+  lines.push(paint.bold('Octopus status'));
   lines.push(`${paint.dim(activeLabel(adaptiveMode).padEnd(12))} ${formatActive(status, currentAccount, adaptiveMode, paint)}`);
   lines.push(`${paint.dim('Switch at'.padEnd(12))} ${formatPercent(status.switchThreshold)}`);
   // Only when something is blocked: a always-visible "Blocked" row would be

@@ -437,7 +437,7 @@ test('a write is logged once it has happened; a refused one says it was refused'
   }
   const audit = lines.filter(l => l.includes('] MCP '));
   assert.equal(audit.length, 2, lines.join('\n'));
-  for (const line of audit) assert.match(line, /^\[TeamClaude\] MCP \w+ by ci refused \(/, line);
+  for (const line of audit) assert.match(line, /^\[Octopus\] MCP \w+ by ci refused \(/, line);
   assert.match(audit[1], /nobody@example\.com/);
 });
 
@@ -456,8 +456,8 @@ test('every write is logged with the tool, the caller and what changed', async (
   } finally {
     console.log = original;
   }
-  assert.ok(lines.some(l => /\[TeamClaude\] MCP set_threshold .*ci.*75/.test(l)), lines.join('\n'));
-  assert.ok(lines.some(l => /\[TeamClaude\] MCP switch_account .*ci.*alice@example\.com/.test(l)), lines.join('\n'));
+  assert.ok(lines.some(l => /\[Octopus\] MCP set_threshold .*ci.*75/.test(l)), lines.join('\n'));
+  assert.ok(lines.some(l => /\[Octopus\] MCP switch_account .*ci.*alice@example\.com/.test(l)), lines.join('\n'));
   assert.equal(lines.some(l => l.startsWith('forged')), false, 'a client name cannot start a line of its own');
   assert.ok(lines.some(l => l.includes('ci forged')), lines.join('\n'));
 });

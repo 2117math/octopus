@@ -339,7 +339,7 @@ export class ClaudeResetRedeemer {
     }
     if (state.grantId !== grant.id) { state.grantId = grant.id; state.requestId = null; }
     state.requestId ||= randomUUID();
-    this.log(`[TeamClaude] Redeeming a banked Claude usage-limit reset on "${name}" — no Claude account can serve the request`);
+    this.log(`[Octopus] Redeeming a banked Claude usage-limit reset on "${name}" — no Claude account can serve the request`);
     const r = await this.claimFn(account, { grantId: grant.id, requestId: state.requestId }, { timeoutMs: left() });
 
     if (r?.error) {
@@ -347,7 +347,7 @@ export class ClaudeResetRedeemer {
       // a replay, and stop anything else spending in the meantime.
       state.cooldownUntil = now + UNKNOWN_HOLD_MS;
       this._holdFleet(account, now + UNKNOWN_HOLD_MS);
-      this.log(`[TeamClaude] Claude reset on "${name}" got no verdict (${r.error}); it may have been spent, so the fleet holds off`);
+      this.log(`[Octopus] Claude reset on "${name}" got no verdict (${r.error}); it may have been spent, so the fleet holds off`);
       return { redeemed: false, account: name, reason: `reset request failed (${r.error}); it may still have gone through` };
     }
     state.requestId = null;
@@ -355,12 +355,12 @@ export class ClaudeResetRedeemer {
     if (r.result === 'reset' || r.result === 'already_used') {
       state.cooldownUntil = now + SUCCESS_HOLD_MS;
       this._holdFleet(account, now + SUCCESS_HOLD_MS);
-      this.log(`[TeamClaude] Redeemed a Claude usage-limit reset on "${name}" — cleared ${(r.cleared || []).join(', ') || 'its limits'}, ${r.resetsLeft ?? '?'} left`);
+      this.log(`[Octopus] Redeemed a Claude usage-limit reset on "${name}" — cleared ${(r.cleared || []).join(', ') || 'its limits'}, ${r.resetsLeft ?? '?'} left`);
       await this._reapply(account, deadline);
       return { redeemed: true, account: name, reason: 'no Claude account could serve the request', result: r.result, resetsLeft: r.resetsLeft, cleared: r.cleared };
     }
     state.cooldownUntil = r.result === 'cooldown' && r.cooldownUntil ? r.cooldownUntil : now + DECLINED_COOLDOWN_MS;
-    this.log(`[TeamClaude] Claude reset on "${name}" declined upstream (${r.result || 'no result'}${r.reason ? `: ${r.reason}` : ''}); nothing was spent`);
+    this.log(`[Octopus] Claude reset on "${name}" declined upstream (${r.result || 'no result'}${r.reason ? `: ${r.reason}` : ''}); nothing was spent`);
     return { redeemed: false, account: name, reason: `upstream declined (${r.result || 'no result'}${r.reason ? `: ${r.reason}` : ''})`, result: r.result };
   }
 

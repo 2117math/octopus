@@ -96,7 +96,7 @@ export function callbackBase(env = process.env, warn = (m) => console.error(m)) 
   if (u && (u.protocol === 'https:' || (u.protocol === 'http:' && loopback))) return u.origin;
   if (warnedBase !== raw) {
     warnedBase = raw;
-    warn(`[TeamClaude] ignoring CALLBACK_API_BASE=${JSON.stringify(raw)}: it must be https:// (plain http:// is allowed for loopback only); using ${DEFAULT_BASE}`);
+    warn(`[Octopus] ignoring CALLBACK_API_BASE=${JSON.stringify(raw)}: it must be https:// (plain http:// is allowed for loopback only); using ${DEFAULT_BASE}`);
   }
   return DEFAULT_BASE;
 }

@@ -167,6 +167,9 @@ export async function checkForUpdate({
   intervalMs = DAY_MS,
   force = false,
 } = {}) {
+  // [Octopus] Local fork: never ask the npm registry (it would offer the original package).
+  return null;
+  // eslint-disable-next-line no-unreachable
   if (!current) return null;
   const cache = await readCache(cachePath);
   let latest = cache.latest || null;
@@ -274,6 +277,9 @@ export async function autoUpdate({
   root = packageRoot(), uid = process.getuid?.(),
   check = checkForUpdate, kind = installKind, install = runUpdate,
 } = {}) {
+  // [Octopus] Local fork: self-update would overwrite this copy with the original package.
+  return { skipped: 'octopus-fork' };
+  // eslint-disable-next-line no-unreachable
   if (existsSync(join(root, '.git'))) return { skipped: 'git' }; // dev checkout — never touch
   if (envVar('DISABLE_AUTOUPDATE') || config.autoUpdate === false) {
     return { skipped: 'disabled' };
@@ -281,7 +287,7 @@ export async function autoUpdate({
   if (uid === 0) {
     if (!rootWarned) {
       rootWarned = true;
-      log('[TeamClaude] Auto-update is disabled when running as root. Update deliberately with: teamclaude update');
+      log('[Octopus] Auto-update is disabled when running as root. Update deliberately with: octopus update');
     }
     return { skipped: 'root' };
   }
@@ -289,18 +295,18 @@ export async function autoUpdate({
   if (!info) return { skipped: 'check-failed' };
   if (!info.updateAvailable) return { ...info, upToDate: true };
   if (!isReleaseVersion(info.latest)) {
-    log(`[TeamClaude] Ignoring registry "latest" that is not a release version: ${JSON.stringify(String(info.latest)).slice(0, 80)}`);
+    log(`[Octopus] Ignoring registry "latest" that is not a release version: ${JSON.stringify(String(info.latest)).slice(0, 80)}`);
     return { ...info, skipped: 'bad-version' };
   }
 
   if (await kind({ root }) !== 'global') {
-    log(`[TeamClaude] Update available: ${info.current} → ${info.latest}. Run: teamclaude update`);
+    log(`[Octopus] Update available: ${info.current} → ${info.latest}. Run: octopus update`);
     return { ...info, notified: true };
   }
-  log(`[TeamClaude] Updating ${info.current} → ${info.latest}…`);
+  log(`[Octopus] Updating ${info.current} → ${info.latest}…`);
   const ok = await install(info.latest);
   log(ok
-    ? `[TeamClaude] Updated to ${info.latest}. Restart teamclaude to use the new version.`
-    : `[TeamClaude] Auto-update failed. Run manually: npm install -g ${PKG_NAME}@latest`);
+    ? `[Octopus] Updated to ${info.latest}. Restart octopus to use the new version.`
+    : `[Octopus] Auto-update failed. Run manually: npm install -g ${PKG_NAME}@latest`);
   return { ...info, updated: ok };
 }

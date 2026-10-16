@@ -408,7 +408,7 @@ export class CredentialSync {
         if (row.deletedAt != null) {
           // Removed on another install. A sign-in since would have replaced the
           // tombstone (storeSignIn), so the account here is a copy to drop.
-          this.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" was removed on another install (${new Date(row.deletedAt).toISOString()}); removing it here`);
+          this.log(`[Octopus] Account "${safeLine(account.name, 64)}" was removed on another install (${new Date(row.deletedAt).toISOString()}); removing it here`);
           this.evictAccount(account);
           result.evicted++;
           continue;
@@ -443,17 +443,17 @@ export class CredentialSync {
         const idx = this.addAccount(entry);
         if (idx == null) continue;
         result.added++;
-        this.log(`[TeamClaude] Account "${safeLine(entry.name, 64)}" added from callback.net (signed in on ${safeLine(row.blob.by, 48)})`);
+        this.log(`[Octopus] Account "${safeLine(entry.name, 64)}" added from callback.net (signed in on ${safeLine(row.blob.by, 48)})`);
       }
       this.lastSyncAt = this.now();
       this.lastError = null;
       if (result.adopted || result.pushed || result.created || result.added || result.evicted || result.expired || result.emptied) {
-        this.log(`[TeamClaude] callback.net sync (${reason}): ${result.adopted} adopted, ${result.pushed} updated, ${result.created} stored, ${result.added} added, ${result.evicted} removed, ${result.expired} tombstones expired, ${result.emptied} emptied`);
+        this.log(`[Octopus] callback.net sync (${reason}): ${result.adopted} adopted, ${result.pushed} updated, ${result.created} stored, ${result.added} added, ${result.evicted} removed, ${result.expired} tombstones expired, ${result.emptied} emptied`);
       }
       return result;
     } catch (/** @type {any} */ err) {
       this.lastError = safeLine(err?.message || String(err), 200);
-      this.log(`[TeamClaude] callback.net sync (${reason}) failed: ${this.lastError}`);
+      this.log(`[Octopus] callback.net sync (${reason}) failed: ${this.lastError}`);
       throw err;
     }
   }
@@ -491,7 +491,7 @@ export class CredentialSync {
 
   /** Install a row's tokens on an account. The echo guard keeps this from being pushed back. */
   _adopt(/** @type {Record<string, any>} */ account, /** @type {Blob} */ blob, /** @type {string} */ why) {
-    this.log(`[TeamClaude] Account "${safeLine(account.name, 64)}": taking the token renewed on ${safeLine(blob.by, 48)} (${why})`);
+    this.log(`[Octopus] Account "${safeLine(account.name, 64)}": taking the token renewed on ${safeLine(blob.by, 48)} (${why})`);
     this.am.updateAccountTokens(account.index, tokensOf(blob));
   }
 
@@ -544,7 +544,7 @@ export class CredentialSync {
       if (row) await this._patch(row, account, tokens);
       else await this._create(account, tokens);
     } catch (/** @type {any} */ err) {
-      this.log(`[TeamClaude] callback.net: could not store the new token for "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
+      this.log(`[Octopus] callback.net: could not store the new token for "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
     }
   }
 
@@ -577,7 +577,7 @@ export class CredentialSync {
       if (holdsRejectedToken(row.blob, account)) await this._markNeedsSignIn(account, row);
       return false;
     } catch (/** @type {any} */ err) {
-      this.log(`[TeamClaude] callback.net: could not look for a newer token for "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
+      this.log(`[Octopus] callback.net: could not look for a newer token for "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
       return false;
     }
   }
@@ -602,7 +602,7 @@ export class CredentialSync {
     } catch (/** @type {any} */ err) {
       // Locked: another install is renewing, and what it stores settles it.
       // Anything else: the row is left as it is, and the next pass tries again.
-      if (err?.token !== 'error_credential_locked') this.log(`[TeamClaude] callback.net: could not lock "${name}" to mark it as needing a sign-in: ${safeLine(err?.message || String(err), 120)}`);
+      if (err?.token !== 'error_credential_locked') this.log(`[Octopus] callback.net: could not lock "${name}" to mark it as needing a sign-in: ${safeLine(err?.message || String(err), 120)}`);
       return false;
     }
     const leaseEnd = leaseStart + LOCK_TIMEOUT_S * 1000 - LEASE_SAFETY_MS;
@@ -617,10 +617,10 @@ export class CredentialSync {
       }
       const blob = /** @type {Blob} */ (current.blob);
       await this._patch(current, account, { accessToken: blob.accessToken, refreshToken: '', expiresAt: blob.expiresAt });
-      this.log(`[TeamClaude] Account "${name}": its token on callback.net was rejected; emptied it there, so it waits for a sign-in or an install with a working token`);
+      this.log(`[Octopus] Account "${name}": its token on callback.net was rejected; emptied it there, so it waits for a sign-in or an install with a working token`);
       return true;
     } catch (/** @type {any} */ err) {
-      this.log(`[TeamClaude] callback.net: could not mark "${name}" as needing a sign-in: ${safeLine(err?.message || String(err), 120)}`);
+      this.log(`[Octopus] callback.net: could not mark "${name}" as needing a sign-in: ${safeLine(err?.message || String(err), 120)}`);
       return false;
     } finally {
       await this._unlock(row, leaseEnd);
@@ -650,7 +650,7 @@ export class CredentialSync {
       this.rows.set(fresh.key, fresh);
       return true;
     } catch (/** @type {any} */ err) {
-      this.log(`[TeamClaude] callback.net: could not record the removal of "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
+      this.log(`[Octopus] callback.net: could not record the removal of "${safeLine(account.name, 64)}": ${safeLine(err?.message || String(err), 160)}`);
       return false;
     }
   }
@@ -736,7 +736,7 @@ export class CredentialSync {
         // request as it is; the renewal arrives through the store, and the
         // next request asks again. Only a dead token has to wait.
         if (!force && !isTokenExpired(account.expiresAt)) {
-          this.log(`[TeamClaude] Account "${name}": another install is renewing its token; keeping the current one until then`);
+          this.log(`[Octopus] Account "${name}": another install is renewing its token; keeping the current one until then`);
           return null;
         }
         // Wait for what it stores.
@@ -747,11 +747,11 @@ export class CredentialSync {
           try { r = rowOf(await this.api('GET', `User/Credential/${row.id}`)); } catch { continue; }
           this.rows.set(r.key, r);
           if (heldElsewhere(r.blob, account, this.by)) {
-            this.log(`[TeamClaude] Account "${name}": renewed on ${safeLine(/** @type {Blob} */ (r.blob).by, 48)} while this install waited`);
+            this.log(`[Octopus] Account "${name}": renewed on ${safeLine(/** @type {Blob} */ (r.blob).by, 48)} while this install waited`);
             return tokensOf(/** @type {Blob} */ (r.blob));
           }
         }
-        this.log(`[TeamClaude] Account "${name}": the lock holder stored no renewal in ${LOCKED_WAIT_MS / 1000}s; trying the lock again`);
+        this.log(`[Octopus] Account "${name}": the lock holder stored no renewal in ${LOCKED_WAIT_MS / 1000}s; trying the lock again`);
         continue;
       }
       const leaseEnd = leaseStart + LOCK_TIMEOUT_S * 1000 - LEASE_SAFETY_MS;
@@ -759,31 +759,31 @@ export class CredentialSync {
       this.rows.set(current.key, current);
       if (current.deletedAt == null && heldElsewhere(current.blob, account, this.by)) {
         await this._unlock(row, leaseEnd);
-        this.log(`[TeamClaude] Account "${name}": already renewed on ${safeLine(/** @type {Blob} */ (current.blob).by, 48)}; taking that token`);
+        this.log(`[Octopus] Account "${name}": already renewed on ${safeLine(/** @type {Blob} */ (current.blob).by, 48)}; taking that token`);
         return tokensOf(/** @type {Blob} */ (current.blob));
       }
       const budgetMs = leaseEnd - STORE_RESERVE_MS - this.now();
       if (budgetMs < MIN_REFRESH_BUDGET_MS) {
         // The lock call itself ate the lease.
         await this._unlock(row, leaseEnd);
-        this.log(`[TeamClaude] Account "${name}": the callback.net lock took too long to answer; trying it again`);
+        this.log(`[Octopus] Account "${name}": the callback.net lock took too long to answer; trying it again`);
         continue;
       }
       try {
         const tokens = await refresh({ budgetMs });
-        if (this.now() > leaseEnd) this.log(`[TeamClaude] Account "${name}": the renewal outlasted the callback.net lock (${LOCK_TIMEOUT_S}s)`);
+        if (this.now() > leaseEnd) this.log(`[Octopus] Account "${name}": the renewal outlasted the callback.net lock (${LOCK_TIMEOUT_S}s)`);
         if (current.deletedAt != null) {
           // Removed on another install since the last pass. This request still
           // gets its token, renewed under the lock and never written over the
           // tombstone; the pass that follows takes the account out.
-          this.log(`[TeamClaude] Account "${name}" was removed on another install; renewed this once, removing it here`);
+          this.log(`[Octopus] Account "${name}" was removed on another install; renewed this once, removing it here`);
           this.sync('tombstone').catch(() => {});
           return tokens;
         }
         try {
           await this._patch(current, account, tokens);
         } catch (/** @type {any} */ err) {
-          this.log(`[TeamClaude] callback.net: could not store the renewed token for "${name}": ${safeLine(err?.message || String(err), 120)}`);
+          this.log(`[Octopus] callback.net: could not store the renewed token for "${name}": ${safeLine(err?.message || String(err), 120)}`);
         }
         return tokens;
       } finally {
@@ -848,10 +848,10 @@ export class CredentialSync {
   _standDown(account, force, why) {
     const name = safeLine(account.name, 64);
     if (!force && !isTokenExpired(account.expiresAt)) {
-      this.log(`[TeamClaude] Account "${name}": not renewing, ${why}; keeping the current token`);
+      this.log(`[Octopus] Account "${name}": not renewing, ${why}; keeping the current token`);
       return null;
     }
-    this.log(`[TeamClaude] Account "${name}": not renewing, ${why}; it waits for the lock (\`teamclaude callback logout\` renews without one)`);
+    this.log(`[Octopus] Account "${name}": not renewing, ${why}; it waits for the lock (\`octopus callback logout\` renews without one)`);
     throw Object.assign(new Error(`not renewed without the callback.net lock: ${why}`), { code: 'CALLBACK_LOCK_UNAVAILABLE' });
   }
 

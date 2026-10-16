@@ -61,9 +61,9 @@ function commandOnPath(cmd) {
  * still works when teamclaude isn't installed on PATH — e.g. run from a clone.
  */
 export function teamclaudeRef() {
-  if (commandOnPath('teamclaude')) return 'teamclaude';
+  if (commandOnPath('octopus')) return 'octopus';
   const entry = process.argv[1];
-  if (!entry) return 'teamclaude';
+  if (!entry) return 'octopus';
   let abs;
   try { abs = realpathSync(entry); } catch { abs = entry; }
   // The double quotes are read by the shell each time the alias runs, so the
@@ -109,7 +109,7 @@ export function printAlias({ shell = detectShell() } = {}) {
   console.log('');
   console.log(`  ${line}`);
   console.log('');
-  console.log(`# Or install it automatically: teamclaude alias --install`);
+  console.log(`# Or install it automatically: octopus alias --install`);
   console.log(`#   → writes to ${rcPathForShell(shell)} (override with --shell <bash|zsh|fish|sh>)`);
 }
 

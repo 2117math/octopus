@@ -35,7 +35,7 @@ export function sxBase(env = process.env, warn = (m) => console.error(m)) {
   if (u && (u.protocol === 'https:' || (u.protocol === 'http:' && loopback))) return raw.replace(/\/$/, '');
   if (warnedBase !== raw) {
     warnedBase = raw;
-    warn(`[TeamClaude] ignoring SX_API_BASE=${JSON.stringify(raw)}: the sx.org API key rides in the URL, so the base must be https:// (plain http:// is allowed for loopback only); using ${DEFAULT_SX_BASE}`);
+    warn(`[Octopus] ignoring SX_API_BASE=${JSON.stringify(raw)}: the sx.org API key rides in the URL, so the base must be https:// (plain http:// is allowed for loopback only); using ${DEFAULT_SX_BASE}`);
   }
   return DEFAULT_SX_BASE;
 }
@@ -235,11 +235,11 @@ export class SxManager {
   async _ensureProxy() {
     try {
       this.proxy = await this.provision();
-      this.log(`[TeamClaude] sx.org proxy ready: ${this.proxy.host}:${this.proxy.port}`);
+      this.log(`[Octopus] sx.org proxy ready: ${this.proxy.host}:${this.proxy.port}`);
       return { ok: true, mode: this.mode, proxy: this.proxy };
     } catch (err) {
       this.proxy = null;
-      this.log(`[TeamClaude] sx.org provisioning failed: ${err.message}`);
+      this.log(`[Octopus] sx.org provisioning failed: ${err.message}`);
       return { ok: false, error: err.message };
     }
   }

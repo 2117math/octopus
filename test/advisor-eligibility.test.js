@@ -82,7 +82,7 @@ test('the narrowing is logged once per throttle window', (t) => {
     for (let i = 0; i < 10; i++) am.getActiveAccount(null, OPUS, FABLE);
   }));
   assert.deepEqual(lines, [
-    `[TeamClaude] Advisor model "${FABLE}" narrows selection to 1 of 3 accounts — set advisorEligibility to "prefer" to route by request model instead`,
+    `[Octopus] Advisor model "${FABLE}" narrows selection to 1 of 3 accounts — set advisorEligibility to "prefer" to route by request model instead`,
   ]);
 
   t.mock.timers.tick(59_000);
@@ -172,7 +172,7 @@ test('prefer mode routes a narrowed advisor request like a plain one', () => {
     assert.equal(am.getActiveAccount(new Set([0, 1]), OPUS, FABLE).name, 'c');
   });
   assert.deepEqual(narrowingLines(lines), [
-    `[TeamClaude] Advisor model "${FABLE}" is served by 1 of 3 accounts — advisorEligibility is "prefer", routing by request model only`,
+    `[Octopus] Advisor model "${FABLE}" is served by 1 of 3 accounts — advisorEligibility is "prefer", routing by request model only`,
   ]);
   // What would have been narrowed is still reported.
   assert.equal(am.getStatus().advisorNarrowing.eligible, 1);
@@ -236,7 +236,7 @@ test('no eligible account still degrades to the request model, in both modes', (
     });
     assert.deepEqual(narrowingLines(lines), [], advisorEligibility);
     assert.deepEqual(lines.filter(l => /No account eligible for advisor model/.test(l)), [
-      `[TeamClaude] No account eligible for advisor model "${FABLE}" — routing by request model only`,
+      `[Octopus] No account eligible for advisor model "${FABLE}" — routing by request model only`,
     ], advisorEligibility);
   }
 });

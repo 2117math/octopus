@@ -46,7 +46,7 @@ export function distributionMode(setting) {
     if (['off', 'false', 'no', '0'].includes(value)) return 'off';
     if (!EVEN_SPELLINGS.includes(value) && !warnedDistributeValues.has(value)) {
       warnedDistributeValues.add(value);
-      console.warn(`[TeamClaude] distributeSessions: unrecognised value ${JSON.stringify(setting)}, distributing evenly (valid: true, false, "adaptive")`);
+      console.warn(`[Octopus] distributeSessions: unrecognised value ${JSON.stringify(setting)}, distributing evenly (valid: true, false, "adaptive")`);
     }
     return 'even';
   }
@@ -241,7 +241,7 @@ function copyBuckets(byBucket) {
 export function accountSwitchThreshold(acct) {
   const { value, rejected } = sanitizeSwitchThreshold(acct?.switchThreshold);
   if (rejected.length) {
-    console.log(`[TeamClaude] Account "${safeLine(acct?.name, 64)}": ignoring ${safeLine(rejected.join(', '), 160)} — a switch threshold must be a number above 0 and at most 1 (0.98 means 98%)`);
+    console.log(`[Octopus] Account "${safeLine(acct?.name, 64)}": ignoring ${safeLine(rejected.join(', '), 160)} — a switch threshold must be a number above 0 and at most 1 (0.98 means 98%)`);
   }
   return value;
 }
@@ -287,12 +287,12 @@ export function accountRouting(acct, listener = null) {
   try {
     const routing = parseRoutingUrl(acct?.routing);
     if (routing && isSelfProxy(routing, listener)) {
-      console.log(`[TeamClaude] Account "${safeLine(acct?.name, 64)}": ignoring routing — that address is this server (${describeRouting(routing)}), and a request sent through it would loop back here`);
+      console.log(`[Octopus] Account "${safeLine(acct?.name, 64)}": ignoring routing — that address is this server (${describeRouting(routing)}), and a request sent through it would loop back here`);
       return null;
     }
     return routing;
   } catch (/** @type {any} */ err) {
-    console.log(`[TeamClaude] Account "${safeLine(acct?.name, 64)}": ignoring routing — ${safeLine(err?.message || String(err), 200)}`);
+    console.log(`[Octopus] Account "${safeLine(acct?.name, 64)}": ignoring routing — ${safeLine(err?.message || String(err), 200)}`);
     return null;
   }
 }
@@ -309,7 +309,7 @@ function makeAccount(acct, index, listener = null) {
   // operator meant to spend, so silently doing nothing would be the one wrong
   // answer.
   if (acct.allowExtraUsage === true && !accountAllowsExtraUsage(acct)) {
-    console.warn(`[TeamClaude] Account "${safeLine(acct.name, 64)}": allowExtraUsage is ignored — only an Anthropic OAuth account can serve on extra usage`);
+    console.warn(`[Octopus] Account "${safeLine(acct.name, 64)}": allowExtraUsage is ignored — only an Anthropic OAuth account can serve on extra usage`);
   }
   return {
     index,
@@ -503,7 +503,7 @@ export function advisorEligibilityMode(setting) {
   const shown = safeLine(JSON.stringify(setting) ?? String(setting), 64);
   if (!warnedAdvisorValues.has(shown)) {
     warnedAdvisorValues.add(shown);
-    console.warn(`[TeamClaude] advisorEligibility: unrecognised value ${shown}, using "strict" (valid: "strict", "prefer")`);
+    console.warn(`[Octopus] advisorEligibility: unrecognised value ${shown}, using "strict" (valid: "strict", "prefer")`);
   }
   return 'strict';
 }
@@ -975,7 +975,7 @@ export class AccountManager {
     if (!account?.entitlementDeniedUntil) return false;
     if (now < account.entitlementDeniedUntil) return true;
     account.entitlementDeniedUntil = null;
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" entitlement cooldown expired, marking available`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" entitlement cooldown expired, marking available`);
     return false;
   }
 
@@ -1038,7 +1038,7 @@ export class AccountManager {
     if (!account?.credentialRejectedUntil) return false;
     if (now < account.credentialRejectedUntil) return true;
     account.credentialRejectedUntil = null;
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" 401 cooldown expired; the next request retries its API key`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" 401 cooldown expired; the next request retries its API key`);
     return false;
   }
 
@@ -1061,7 +1061,7 @@ export class AccountManager {
     if (!account?.routingFailedUntil) return false;
     if (now < account.routingFailedUntil) return true;
     account.routingFailedUntil = null;
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" routing cooldown expired; the next request retries its proxy`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" routing cooldown expired; the next request retries its proxy`);
     return false;
   }
 
@@ -1227,7 +1227,7 @@ export class AccountManager {
     const why = reason === 'quota' ? 'is past its switch threshold'
       : reason === 'upstream-rejected' ? 'was refused upstream on quota'
       : reason ? `is unavailable (${reason})` : 'can no longer serve normally';
-    console.log(`[TeamClaude] Switched to account "${safeLine(best.name, 64)}" — "${safeLine(parked.name, 64)}" ${why} and only served as the fallback`);
+    console.log(`[Octopus] Switched to account "${safeLine(best.name, 64)}" — "${safeLine(parked.name, 64)}" ${why} and only served as the fallback`);
   }
 
   /**
@@ -1287,12 +1287,12 @@ export class AccountManager {
     const where = this._scopeLabel(model);
     if (hopOnly) {
       console.log(paid
-        ? `[TeamClaude] Failover hop onto "${name}" on extra usage (paid overage)${where}`
-        : `[TeamClaude] Failover hop onto "${name}" — past its switch threshold, but with free quota left${where}`);
+        ? `[Octopus] Failover hop onto "${name}" on extra usage (paid overage)${where}`
+        : `[Octopus] Failover hop onto "${name}" — past its switch threshold, but with free quota left${where}`);
     } else {
       console.log(paid
-        ? `[TeamClaude] No account has quota left${where} — routing to "${name}" on extra usage (paid overage)`
-        : `[TeamClaude] No account is under its switch threshold${where} — routing to "${name}" on the free quota it has left`);
+        ? `[Octopus] No account has quota left${where} — routing to "${name}" on extra usage (paid overage)`
+        : `[Octopus] No account is under its switch threshold${where} — routing to "${name}" on the free quota it has left`);
     }
     return true;
   }
@@ -1313,8 +1313,8 @@ export class AccountManager {
     if (!headroom) return;
     const where = this._scopeLabel(e.model);
     console.log(e.paid
-      ? `[TeamClaude] ${headroom} — leaving extra usage${where}`
-      : `[TeamClaude] ${headroom} — "${safeLine(e.account.name, 64)}" no longer serves past its switch threshold${where}`);
+      ? `[Octopus] ${headroom} — leaving extra usage${where}`
+      : `[Octopus] ${headroom} — "${safeLine(e.account.name, 64)}" no longer serves past its switch threshold${where}`);
   }
 
   /**
@@ -1456,8 +1456,8 @@ export class AccountManager {
       // The model name comes out of the client's request body (see safe-text.js).
       const name = safeLine(advisorModel, 64);
       console.log(prefer
-        ? `[TeamClaude] Advisor model "${name}" is served by ${eligible} of ${of} accounts — advisorEligibility is "prefer", routing by request model only`
-        : `[TeamClaude] Advisor model "${name}" narrows selection to ${eligible} of ${of} accounts — set advisorEligibility to "prefer" to route by request model instead`);
+        ? `[Octopus] Advisor model "${name}" is served by ${eligible} of ${of} accounts — advisorEligibility is "prefer", routing by request model only`
+        : `[Octopus] Advisor model "${name}" narrows selection to ${eligible} of ${of} accounts — set advisorEligibility to "prefer" to route by request model instead`);
     }
     return narrows && prefer ? null : advisorModel;
   }
@@ -1542,7 +1542,7 @@ export class AccountManager {
         this._advisorDegradeLogAt = Date.now() + 60_000;
         // The model names come out of the client's request body, so they are
         // stripped before reaching the log (see safe-text.js).
-        console.log(`[TeamClaude] No account eligible for advisor model "${safeLine(advisorModel, 64)}" — routing by request model only`);
+        console.log(`[Octopus] No account eligible for advisor model "${safeLine(advisorModel, 64)}" — routing by request model only`);
       }
     }
     return this._select(exclude, model, null, true);
@@ -1727,7 +1727,7 @@ export class AccountManager {
           // once, so the destination gets the same failover burst any other
           // switch would send it — pace it (issue #84).
           this._beginRamp(next);
-          console.log(`[TeamClaude] Session pin on "${pinned.name}" released — its weekly window rolled over; re-routing to "${next.name}"`);
+          console.log(`[Octopus] Session pin on "${pinned.name}" released — its weekly window rolled over; re-routing to "${next.name}"`);
           return next;
         }
         // The traffic did not move, so the observation is left where it is and
@@ -1888,8 +1888,8 @@ export class AccountManager {
 
   /** Best-available biased toward the fewest active sessions, so new sessions
    * spread across equal-priority accounts instead of funnelling onto one. Order:
-   * priority → [top pressure band, when expiry routing is on] → fewest active
-   * sessions → fewest in-flight → highest expiry pressure (inert when expiry
+   * priority → [top pressure band, when expiry routing is on] → least weekly
+   * used [local patch] → fewest active sessions → fewest in-flight → highest expiry pressure (inert when expiry
    * routing is off) → soonest weekly reset (the existing tiebreak). */
   _pickLeastLoadedEven(exclude = null, model = null, advisorModel = null) {
     const now = Date.now();
@@ -1904,6 +1904,7 @@ export class AccountManager {
     let best = null;
     let bestPriority = Infinity;
     let bestSpent = Infinity;
+    let bestUsed = Infinity;
     let bestSessions = Infinity;
     let bestInFlight = Infinity;
     let bestPressure = Infinity;
@@ -1911,21 +1912,31 @@ export class AccountManager {
     candidates.forEach((account, i) => {
       const priority = account.priority || 0;
       const heldOff = spent[i];
+      // [local patch] Least-used weekly window first: the weekly utilization
+      // that gates this model (family bucket or shared weekly, whichever is
+      // higher), ascending. New sessions land on the account with the most
+      // weekly headroom, so no single account is drained to 100% while its
+      // siblings sit half-used. Unknown sorts first, as a reset does: using
+      // the account is how its quota becomes known.
+      const used = this._rankedWeeklyUsed(account, model);
       const sessions = this.sessionTracker.activeCountFor(account.index, now);
       const inFlight = account.inFlight || 0;
       const pressure = pressures[i];
       const reset = this._rankedReset(account, model);
       const samePriority = priority === bestPriority;
       const sameSpend = samePriority && heldOff === bestSpent;
+      const sameUsed = sameSpend && used === bestUsed;
       if (priority < bestPriority
         || (samePriority && heldOff < bestSpent)
-        || (sameSpend && sessions < bestSessions)
-        || (sameSpend && sessions === bestSessions && inFlight < bestInFlight)
-        || (sameSpend && sessions === bestSessions && inFlight === bestInFlight && pressure < bestPressure)
-        || (sameSpend && sessions === bestSessions && inFlight === bestInFlight && pressure === bestPressure && reset < bestReset)) {
+        || (sameSpend && used < bestUsed)
+        || (sameUsed && sessions < bestSessions)
+        || (sameUsed && sessions === bestSessions && inFlight < bestInFlight)
+        || (sameUsed && sessions === bestSessions && inFlight === bestInFlight && pressure < bestPressure)
+        || (sameUsed && sessions === bestSessions && inFlight === bestInFlight && pressure === bestPressure && reset < bestReset)) {
         best = account;
         bestPriority = priority;
         bestSpent = heldOff;
+        bestUsed = used;
         bestSessions = sessions;
         bestInFlight = inFlight;
         bestPressure = pressure;
@@ -1933,6 +1944,13 @@ export class AccountManager {
       }
     });
     return best;
+  }
+
+  /** [local patch] The governing weekly utilization as an ascending sort key
+   * for _pickLeastLoadedEven; unknown sorts first, matching _rankedReset. */
+  _rankedWeeklyUsed(account, model) {
+    const used = this._governingWeekly(account, model);
+    return Number.isFinite(used) ? used : -Infinity;
   }
 
   /** Record that a session's request was served by an account (always on, even
@@ -2425,9 +2443,9 @@ export class AccountManager {
     this._setCurrent(best);
     this._beginRamp(best);
     if (best.status === 'throttled') {
-      console.log(`[TeamClaude] All accounts unavailable — revalidating throttled "${best.name}" with a live request`);
+      console.log(`[Octopus] All accounts unavailable — revalidating throttled "${best.name}" with a live request`);
     } else {
-      console.log(`[TeamClaude] All accounts over threshold — probing "${best.name}" to refresh quota`);
+      console.log(`[Octopus] All accounts over threshold — probing "${best.name}" to refresh quota`);
     }
     return best;
   }
@@ -2593,7 +2611,7 @@ export class AccountManager {
       account.status = 'active';
       account.rateLimitedUntil = null;
       account.throttledAt = null;
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" rate limit expired, marking active`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" rate limit expired, marking active`);
     }
 
     if (account.status === 'exhausted') return 'exhausted';
@@ -3425,7 +3443,7 @@ export class AccountManager {
     const now = Date.now();
     if (now < (this._rolloverHeldLogAt.get(key) || 0)) return;
     this._rolloverHeldLogAt.set(key, now + 60_000);
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" rolled over its ${window} window ${this._heldRolloverReason(reason)}`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" rolled over its ${window} window ${this._heldRolloverReason(reason)}`);
   }
 
   /**
@@ -3667,7 +3685,7 @@ export class AccountManager {
 
     // Clear expired unified quotas
     if (q.unified5h != null && q.unified5hReset && now >= q.unified5hReset) {
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" session quota reset`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" session quota reset`);
       // Recorded on the account, not just returned. _clearExpiredQuotas is
       // reached from two directions — refreshExpiredQuotas on the request path,
       // which runs the session-reset switch rule, and _isNearQuota via
@@ -3688,7 +3706,7 @@ export class AccountManager {
       session = true;
     }
     if (q.unified7d != null && q.unified7dReset && now >= q.unified7dReset) {
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" weekly quota reset`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" weekly quota reset`);
       q.unified7d = null;
       q.unified7dReset = null;
       q.unified7dSeenAt = null;
@@ -3733,7 +3751,7 @@ export class AccountManager {
       // so a reading is never discarded before it has had a window to prove out.
       if (!q[seenField]) { q[seenField] = now; continue; }
       if (now < q[seenField] + this.familyStaleMs) continue;
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" ${label} weekly reading is stale — revalidating on the next ${label} request`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" ${label} weekly reading is stale — revalidating on the next ${label} request`);
       q[key] = null;
       q[`${key}Reset`] = null;
       q[seenField] = null;
@@ -3939,7 +3957,7 @@ export class AccountManager {
     // failed back onto the same account still finds the roll waiting.
     this._setCurrent(best);
     this._beginRamp(best);
-    console.log(`[TeamClaude] Account "${best.name}" session quota reset and weekly expires sooner — switching to it`);
+    console.log(`[Octopus] Account "${best.name}" session quota reset and weekly expires sooner — switching to it`);
   }
 
   _isNearQuota(account, model = null) {
@@ -4038,7 +4056,7 @@ export class AccountManager {
     const wk = best.quota.unified7d != null
       ? `${(best.quota.unified7d * 100).toFixed(1)}% weekly used`
       : 'weekly quota unknown';
-    console.log(`[TeamClaude] Starting on account "${best.name}" (priority ${best.priority || 0}, ${wk})`);
+    console.log(`[Octopus] Starting on account "${best.name}" (priority ${best.priority || 0}, ${wk})`);
     return best;
   }
 
@@ -4067,8 +4085,8 @@ export class AccountManager {
       if (switched) {
         this._beginRamp(best);
         console.log(scoped
-          ? `[TeamClaude] Diverting "${safeLine(model, 64)}" to "${best.name}" — "${current.name}" cannot serve it`
-          : `[TeamClaude] Switched to account "${best.name}"`);
+          ? `[Octopus] Diverting "${safeLine(model, 64)}" to "${best.name}" — "${current.name}" cannot serve it`
+          : `[Octopus] Switched to account "${best.name}"`);
       }
       return best;
     }
@@ -4107,7 +4125,7 @@ export class AccountManager {
       soonestAccount.rateLimitedUntil = null;
       this._setCurrent(soonestAccount);
       this._beginRamp(soonestAccount);
-      console.log(`[TeamClaude] Account "${soonestAccount.name}" reset, switching to it`);
+      console.log(`[Octopus] Account "${soonestAccount.name}" reset, switching to it`);
       return soonestAccount;
     }
 
@@ -4201,7 +4219,7 @@ export class AccountManager {
     if (account.probing && account.quota.unified7dReset != null) {
       account.probing = false;
       account.requalify = true;
-      console.log(`[TeamClaude] Learned weekly quota for "${safeLine(account.name, 64)}", re-evaluating selection`);
+      console.log(`[Octopus] Learned weekly quota for "${safeLine(account.name, 64)}", re-evaluating selection`);
     }
 
     this._observeBurnRate(account, observed);
@@ -4212,7 +4230,7 @@ export class AccountManager {
 
     if (this._isNearQuota(account)) {
       const pct = account.quota.unified7d != null ? Math.round(account.quota.unified7d * 100) : null;
-      console.log(`[TeamClaude] "${safeLine(account.name, 64)}" near weekly quota${pct == null ? '' : ` (${pct}%)`}`);
+      console.log(`[Octopus] "${safeLine(account.name, 64)}" near weekly quota${pct == null ? '' : ` (${pct}%)`}`);
     }
   }
 
@@ -4288,7 +4306,7 @@ export class AccountManager {
     if (account.probing && account.quota.unified7dReset != null) {
       account.probing = false;
       account.requalify = true;
-      console.log(`[TeamClaude] Learned weekly quota for "${safeLine(account.name, 64)}", re-evaluating selection`);
+      console.log(`[Octopus] Learned weekly quota for "${safeLine(account.name, 64)}", re-evaluating selection`);
     }
 
     // `unified-status` is upstream's verdict on THIS response. A family-cap 429
@@ -4344,7 +4362,7 @@ export class AccountManager {
         : account.quota.tokensLimit
           ? ((1 - account.quota.tokensRemaining / account.quota.tokensLimit) * 100).toFixed(1)
           : '?';
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" at ${pct}% usage — will switch on next request`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" at ${pct}% usage — will switch on next request`);
     }
   }
 
@@ -4595,7 +4613,7 @@ export class AccountManager {
       // drop the dead-token guard too — otherwise the account would come back
       // active but never attempt a refresh (see ensureTokenFresh).
       account._deadRefreshToken = null;
-      console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" re-enabled — clearing error state`);
+      console.log(`[Octopus] Account "${safeLine(account.name, 64)}" re-enabled — clearing error state`);
     }
     // The same explicit "try this again" for an API key sitting out a 401.
     if (!disabled) this.clearCredentialRejected(accountIndex);
@@ -4666,7 +4684,7 @@ export class AccountManager {
       }
       // Worth a line: the account was refusing this family and is not any more.
       if (wasSpent && !(q[key] != null && q[key] >= this.thresholdFor(key, account))) {
-        console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" ${label} weekly quota confirmed available by probe`);
+        console.log(`[Octopus] Account "${safeLine(account.name, 64)}" ${label} weekly quota confirmed available by probe`);
       }
     }
     // Families beyond the two with dedicated fields. Replaced wholesale rather
@@ -4700,11 +4718,11 @@ export class AccountManager {
       const was = q.spend;
       q.spend = { ...usage.spend };
       if (q.spend.enabled && !was?.enabled) {
-        console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" can bill real money past its plan limits (extra usage is enabled upstream)`);
+        console.log(`[Octopus] Account "${safeLine(account.name, 64)}" can bill real money past its plan limits (extra usage is enabled upstream)`);
       }
       const spentNow = (q.spend.usedMinor || 0) > 0;
       if (spentNow && !((was?.usedMinor || 0) > 0)) {
-        console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" has started spending real money: ${formatMoney(q.spend)}`);
+        console.log(`[Octopus] Account "${safeLine(account.name, 64)}" has started spending real money: ${formatMoney(q.spend)}`);
       }
     }
 
@@ -4805,7 +4823,7 @@ export class AccountManager {
     // after throttleProbeFloorMs from here, so a probe that 429s again pushes
     // the next probe out by a full floor rather than hammering upstream.
     account.throttledAt = Date.now();
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" rate limited for ${retryAfterSeconds}s`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" rate limited for ${retryAfterSeconds}s`);
   }
 
   /**
@@ -4819,7 +4837,7 @@ export class AccountManager {
     account.status = 'active';
     account.rateLimitedUntil = null;
     account.throttledAt = null;
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" revalidated — rate limit no longer applies, back in rotation`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" revalidated — rate limit no longer applies, back in rotation`);
   }
 
   /**
@@ -4834,7 +4852,7 @@ export class AccountManager {
     if (!account || account.quota.unifiedStatus !== 'rejected') return;
     account.quota.unifiedStatus = null;
     account.quota.unifiedStatusSeenAt = null;
-    console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" upstream rejection cleared — it no longer applies`);
+    console.log(`[Octopus] Account "${safeLine(account.name, 64)}" upstream rejection cleared — it no longer applies`);
   }
 
   /**
@@ -4871,7 +4889,7 @@ export class AccountManager {
     if (account._deadRefreshToken && account._deadRefreshToken === account.refreshToken) {
       if (account.status !== 'error') {
         this._needsLogin(account, 'refresh_rejected', 'its refresh token was already rejected');
-        console.error(`[TeamClaude] Account "${safeLine(account.name, 64)}" still holds a rejected refresh token — run: teamclaude login`);
+        console.error(`[Octopus] Account "${safeLine(account.name, 64)}" still holds a rejected refresh token — run: octopus login`);
       }
       return;
     }
@@ -4897,7 +4915,7 @@ export class AccountManager {
     if (account._refreshPromise) return account._refreshPromise;
 
     account._refreshPromise = (async () => {
-      console.log(`[TeamClaude] Refreshing token for account "${safeLine(account.name, 64)}"...`);
+      console.log(`[Octopus] Refreshing token for account "${safeLine(account.name, 64)}"...`);
       // The token we SEND, captured before the await. A config reload or
       // `teamclaude import` (updateAccountTokens) can install newer tokens while
       // the grant is in flight; reading `account.refreshToken` afterwards would
@@ -4931,7 +4949,7 @@ export class AccountManager {
         const newTokens = await this._refreshCoordinator(account, refresh, { force });
         if (newTokens == null) return;
         if (account.refreshToken !== sent) {
-          console.log(`[TeamClaude] Discarding refresh result for account "${safeLine(account.name, 64)}" — its tokens were replaced while the refresh was in flight`);
+          console.log(`[Octopus] Discarding refresh result for account "${safeLine(account.name, 64)}" — its tokens were replaced while the refresh was in flight`);
           return;
         }
         account.credential = newTokens.accessToken;
@@ -4941,10 +4959,10 @@ export class AccountManager {
         account._deadRefreshToken = null; // this token works; clear any stale guard
         // Set before the listener runs: it is what lets the sync store them.
         account._minted = minted;
-        console.log(`[TeamClaude] Token refreshed for account "${safeLine(account.name, 64)}"`);
+        console.log(`[Octopus] Token refreshed for account "${safeLine(account.name, 64)}"`);
         this._onTokenRefresh?.(accountIndex, newTokens);
       } catch (/** @type {any} */ err) {
-        console.error(`[TeamClaude] Token refresh failed for "${safeLine(account.name, 64)}": ${err.message}`);
+        console.error(`[Octopus] Token refresh failed for "${safeLine(account.name, 64)}": ${err.message}`);
         // The refresh never reached the token endpoint: the account's own
         // routing proxy is down. The forward that follows would fail the same
         // way, so hold the account out of rotation now rather than after it.
@@ -4964,11 +4982,11 @@ export class AccountManager {
           // a token imported mid-refresh stays untouched and gets its own try.
           account._deadRefreshToken = sent;
           if (account.refreshToken !== sent) {
-            console.log(`[TeamClaude] Account "${safeLine(account.name, 64)}" received new tokens while its old refresh token was being rejected — keeping the new ones`);
+            console.log(`[Octopus] Account "${safeLine(account.name, 64)}" received new tokens while its old refresh token was being rejected — keeping the new ones`);
             return;
           }
           this._needsLogin(account, 'refresh_rejected', `upstream rejected its refresh token (${err.status})`);
-          console.error(`[TeamClaude] Account "${safeLine(account.name, 64)}" needs re-login (refresh token rejected) — run: teamclaude login`);
+          console.error(`[Octopus] Account "${safeLine(account.name, 64)}" needs re-login (refresh token rejected) — run: octopus login`);
           this._onAccountError?.(account);
         }
       } finally {
@@ -5039,11 +5057,11 @@ export class AccountManager {
       account.credentialRejections = (account.credentialRejections || 0) + 1;
       account.credentialRejectedUntil = Date.now() + seconds * 1000;
       const nth = account.credentialRejections > 1 ? `, ${account.credentialRejections} in a row` : '';
-      console.error(`[TeamClaude] Account "${safeLine(account.name, 64)}" held out of rotation for ${seconds}s: ${why}${nth} — it will be retried after that; if it keeps failing, check the key in the config`);
+      console.error(`[Octopus] Account "${safeLine(account.name, 64)}" held out of rotation for ${seconds}s: ${why}${nth} — it will be retried after that; if it keeps failing, check the key in the config`);
       return;
     }
     const { remedy } = this._needsLogin(account, 'credential_rejected', why);
-    console.error(`[TeamClaude] Account "${safeLine(account.name, 64)}" taken out of rotation: ${why} — run: ${remedy}`);
+    console.error(`[Octopus] Account "${safeLine(account.name, 64)}" taken out of rotation: ${why} — run: ${remedy}`);
     this._onAccountError?.(account);
   }
 
@@ -5062,7 +5080,7 @@ export class AccountManager {
       code,
       detail,
       since: Date.now(),
-      remedy: providerOf(account) === 'codex' ? 'teamclaude login --codex' : 'teamclaude login',
+      remedy: providerOf(account) === 'codex' ? 'octopus login --codex' : 'octopus login',
     };
     return account.errorReason;
   }
@@ -5082,7 +5100,7 @@ export class AccountManager {
     // Tokens from elsewhere (the store, a reload from disk) were not minted here.
     account._minted = false;
     if (account.status === 'error') account.status = 'active';
-    console.log(`[TeamClaude] Updated tokens for account "${safeLine(account.name, 64)}"`);
+    console.log(`[Octopus] Updated tokens for account "${safeLine(account.name, 64)}"`);
     this._onTokenRefresh?.(accountIndex, {
       accessToken,
       refreshToken: account.refreshToken,

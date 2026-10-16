@@ -89,8 +89,8 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
       claimed.add(accountManager.accounts.length - 1);
       added++;
       console.log(cfgAcct
-        ? `[TeamClaude] Re-admitting known account "${diskAcct.name}" from config`
-        : `[TeamClaude] Picked up new account "${diskAcct.name}" from config`);
+        ? `[Octopus] Re-admitting known account "${diskAcct.name}" from config`
+        : `[Octopus] Picked up new account "${diskAcct.name}" from config`);
       continue;
     }
 
@@ -201,7 +201,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
         const creds = await importCredentials(diskAcct.importFrom);
         freshCred = { accessToken: creds.accessToken, refreshToken: creds.refreshToken, expiresAt: creds.expiresAt };
       } catch (/** @type {any} */ err) {
-        console.error(`[TeamClaude] Re-import failed for "${safeLine(diskAcct.name, 64)}": ${err.message}`);
+        console.error(`[Octopus] Re-import failed for "${safeLine(diskAcct.name, 64)}": ${err.message}`);
       }
     } else if (diskAcct.type === 'oauth' && diskAcct.accessToken) {
       freshCred = { accessToken: diskAcct.accessToken, refreshToken: diskAcct.refreshToken, expiresAt: diskAcct.expiresAt };
@@ -220,7 +220,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
         freshCred.expiresAt < mgr.expiresAt;
       if (changed && !diskIsStaler) {
         accountManager.updateAccountTokens(mgr.index, freshCred);
-        console.log(`[TeamClaude] Refreshed credentials for "${safeLine(mgr.name, 64)}"`);
+        console.log(`[Octopus] Refreshed credentials for "${safeLine(mgr.name, 64)}"`);
       }
     } else if (freshCred.apiKey && mgr.credential !== freshCred.apiKey) {
       mgr.credential = freshCred.apiKey;
@@ -228,7 +228,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
       // A different key is a different credential: the 401 hold was about the
       // old one, and the operator who just fixed it should not wait it out.
       accountManager.clearCredentialRejected(mgr.index);
-      console.log(`[TeamClaude] Updated API key for "${safeLine(mgr.name, 64)}"`);
+      console.log(`[Octopus] Updated API key for "${safeLine(mgr.name, 64)}"`);
     }
   }
   // Accounts running here that no disk row claims any more were removed on
@@ -256,7 +256,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
     const gone = accountManager.accounts[i];
     if (claimed.has(i) || pendingAdds.has(gone.id)) continue;
     const cfgIdx = configIndexFor(memConfig.accounts, accountManager.accounts, i);
-    console.log(`[TeamClaude] Removed account "${safeLine(gone.name, 64)}": its config entry is gone from disk`);
+    console.log(`[Octopus] Removed account "${safeLine(gone.name, 64)}": its config entry is gone from disk`);
     accountManager.removeAccount(i);
     if (cfgIdx >= 0) memConfig.accounts.splice(cfgIdx, 1);
     dropped++;

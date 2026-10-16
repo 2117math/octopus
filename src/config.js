@@ -160,7 +160,7 @@ function applyUpstreamProxy(config) {
   try {
     setUpstreamProxy(resolveUpstreamProxy(config));
   } catch (err) {
-    console.error(`[TeamClaude] Bad proxy setting in ${getConfigPath()}: ${err.message}`);
+    console.error(`[Octopus] Bad proxy setting in ${getConfigPath()}: ${err.message}`);
     process.exit(1);
   }
 }
@@ -238,7 +238,7 @@ async function acquireConfigLock(lockPath) {
       return true;
     } catch (err) {
       if (err.code !== 'EEXIST') {
-        console.error(`[TeamClaude] Cannot create ${lockPath} (${err.code || err.message}); writing the config without it`);
+        console.error(`[Octopus] Cannot create ${lockPath} (${err.code || err.message}); writing the config without it`);
         return false;
       }
     }
@@ -247,7 +247,7 @@ async function acquireConfigLock(lockPath) {
       continue;
     }
     if (Date.now() >= deadline) {
-      console.error(`[TeamClaude] ${lockPath} is still held by another process after ${waitMs}ms; writing the config without it`);
+      console.error(`[Octopus] ${lockPath} is still held by another process after ${waitMs}ms; writing the config without it`);
       return false;
     }
     await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS));

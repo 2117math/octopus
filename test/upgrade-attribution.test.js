@@ -108,7 +108,7 @@ test('a key-less loopback handshake stays unattributed, as its requests do', asy
       assert.deepEqual(tracker.export(), {});
       await close();
     });
-    assert.ok(lines.some(l => /^\[TeamClaude\] WebSocket \/v1\/session_ingress\/ws\/abc connected$/.test(l)), `no prefix, got: ${lines}`);
+    assert.ok(lines.some(l => /^\[Octopus\] WebSocket \/v1\/session_ingress\/ws\/abc connected$/.test(l)), `no prefix, got: ${lines}`);
   });
 });
 

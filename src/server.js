@@ -386,9 +386,9 @@ function usableClientKeys(clientKeys) {
     for (const entry of clientKeys) {
       const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
       if (!name || !entry?.key) {
-        console.error('[TeamClaude] proxy.clientKeys: an entry without a name and a key is ignored (usage is attributed by name)');
+        console.error('[Octopus] proxy.clientKeys: an entry without a name and a key is ignored (usage is attributed by name)');
       } else if (seen.has(name)) {
-        console.error(`[TeamClaude] proxy.clientKeys: duplicate name "${name}" — its keys share one usage counter`);
+        console.error(`[Octopus] proxy.clientKeys: duplicate name "${name}" — its keys share one usage counter`);
       }
       seen.add(name);
     }
@@ -462,7 +462,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
     try {
       mkdirSync(logDir, { recursive: true, mode: 0o700 });
     } catch (err) {
-      console.error(`[TeamClaude] Request logging disabled: cannot create logDir ${logDir}: ${err.message}`);
+      console.error(`[Octopus] Request logging disabled: cannot create logDir ${logDir}: ${err.message}`);
       logDir = null;
     }
   }
@@ -638,7 +638,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           // The reason belongs in the log, not the reply: a reload failure
           // names config paths and account details, and this endpoint is
           // reachable by anyone holding a client key.
-          console.error('[TeamClaude] Reload failed:', err.message);
+          console.error('[Octopus] Reload failed:', err.message);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'reload failed; see the proxy log' }));
         }
@@ -692,7 +692,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           try {
             await hooks.reload();
           } catch (err) {
-            console.error('[TeamClaude] Reload after an account change failed:', /** @type {Error} */ (err).message);
+            console.error('[Octopus] Reload after an account change failed:', /** @type {Error} */ (err).message);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: false, error: 'saved to the config file, but the reload failed; see the proxy log' }));
             return;
@@ -700,7 +700,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           // Leave a trace where the manual switch already leaves one: on a
           // headless deployment this endpoint is the only way the change
           // happens, and an account leaving rotation should never be silent.
-          console.log(`[TeamClaude] ${isPriority
+          console.log(`[Octopus] ${isPriority
             ? `Set priority of "${result.name}" to ${result.priority}`
             : `${result.disabled ? 'Disabled' : 'Enabled'} account "${result.name}"`} (control endpoint)`);
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -710,7 +710,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           // account, bad priority) and is safe to echo; anything else is ours.
           const known = err instanceof ConfigOpError;
           const message = /** @type {Error} */ (err).message;
-          if (!known) console.error('[TeamClaude] Account control failed:', message);
+          if (!known) console.error('[Octopus] Account control failed:', message);
           res.writeHead(known ? 400 : 500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: known ? message : 'account change failed; see the proxy log' }));
         }
@@ -730,7 +730,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: true }));
         } catch (err) {
-          console.error('[TeamClaude] Quota probe failed:', err.message);
+          console.error('[Octopus] Quota probe failed:', err.message);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'quota probe failed; see the proxy log' }));
         }
@@ -784,7 +784,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         // to the activity log, so this one line covers both. Without it a manual
         // switch is the only account change that happens invisibly — on exactly
         // the background-service deployment this endpoint exists for.
-        console.log(`[TeamClaude] Switched to account "${name}" (manual)`
+        console.log(`[Octopus] Switched to account "${name}" (manual)`
           + (eligible ? '' : ` — ${reason}, so rotation will not use it`));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, account: name, eligible, ...(reason ? { reason } : {}) }));
@@ -841,7 +841,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           // A ConfigOpError is the caller's input being refused and says so in
           // words meant for them; anything else is ours and goes to the log.
           const bad = err instanceof ConfigOpError;
-          console.error('[TeamClaude] Threshold change failed:', message);
+          console.error('[Octopus] Threshold change failed:', message);
           res.writeHead(bad ? 400 : 500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: bad ? message : 'threshold change failed; see the proxy log' }));
           return;
@@ -854,7 +854,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
           await hooks.reload();
         } catch (err) {
           const message = /** @type {Error} */ (err).message;
-          console.error('[TeamClaude] Reload after a threshold change failed:', message);
+          console.error('[Octopus] Reload after a threshold change failed:', message);
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ ok: false, error: 'saved to the config file, but the reload failed; see the proxy log' }));
           return;
@@ -862,7 +862,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         // The same trace a manual switch leaves, and for the same reason: on the
         // background-service deployment this endpoint exists for, a threshold
         // that quietly retires an account would otherwise change nothing visible.
-        console.log(`[TeamClaude] Switch threshold set to ${Math.round(saved * 1000) / 10}% (dashboard)`
+        console.log(`[Octopus] Switch threshold set to ${Math.round(saved * 1000) / 10}% (dashboard)`
           + (dropped.length ? ` — dropped the per-bucket thresholds (${dropped.join(', ')})` : ''));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, switchThreshold: saved, dropped }));
@@ -902,13 +902,13 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
       if (controlPath === '/teamclaude' || controlPath.startsWith('/teamclaude/')
         || controlPath === '/teamrouter' || controlPath.startsWith('/teamrouter/')) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'unknown teamclaude control route (check the path and the method)' }));
+        res.end(JSON.stringify({ error: 'unknown octopus control route (check the path and the method)' }));
         return;
       }
 
       return forward(req, res);
     } catch (err) {
-      reportFailure('[TeamClaude] Unhandled error:', err);
+      reportFailure('[Octopus] Unhandled error:', err);
       // The window above throws for real: `getStatusExtra` is a hook the
       // application installs, and reload/switch reach the account manager.
       answerUnhandled(res);
@@ -941,7 +941,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
       const hours = resolveLogRetentionHours(config);
       return sweepRequestLogs(logDir, hours)
         .then((n) => {
-          if (n) console.log(`[TeamClaude] Removed ${n} expired request log(s) from ${logDir} (logRetentionHours=${hours}, set 0 to keep them)`);
+          if (n) console.log(`[Octopus] Removed ${n} expired request log(s) from ${logDir} (logRetentionHours=${hours}, set 0 to keep them)`);
         })
         .catch(() => {});
     };
@@ -991,7 +991,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         // line, so the 401 alone leaves an operator with a channel that is
         // silently dead — the same shape as the outage this gate could cause if
         // a client turns out not to send the key.
-        console.log(`[TeamClaude] WebSocket upgrade refused (no proxy key) from ${safeLine(/** @type {import('node:net').Socket} */ (socket)?.remoteAddress || 'unknown')} for ${safeLine(req.url)}`);
+        console.log(`[Octopus] WebSocket upgrade refused (no proxy key) from ${safeLine(/** @type {import('node:net').Socket} */ (socket)?.remoteAddress || 'unknown')} for ${safeLine(req.url)}`);
         try { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); } catch { /* already gone */ }
         socket.destroy();
         return;
@@ -1002,7 +1002,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
       // under `clients` at all (#325).
       relayUpgrade(req, socket, head, upstream, sx, { client: auth.client, clientUsage, stripOverage: shouldStripOverageHeaders(config) });
     } catch (err) {
-      console.error(`[TeamClaude] WebSocket upgrade handler failed for ${safeLine(req?.url)}: ${err?.message || err}`);
+      console.error(`[Octopus] WebSocket upgrade handler failed for ${safeLine(req?.url)}: ${err?.message || err}`);
       try { socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); } catch { /* already gone */ }
       socket.destroy();
     }
@@ -1192,7 +1192,7 @@ export function relayHttpForward(req, res, stripOverage = false) {
   // legitimate request is lost.
   const hostname = target.hostname.replace(/^\[|\]$/g, '');
   const refuse = (why) => {
-    console.error(`[TeamClaude] HTTP forward to ${target.host} refused: ${why}`);
+    console.error(`[Octopus] HTTP forward to ${target.host} refused: ${why}`);
     if (res.headersSent) { res.destroy(); return; }
     res.writeHead(403, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ type: 'error', error: { type: 'permission_error', message: `Forward to ${target.host} refused: ${why}` } }));
@@ -1222,7 +1222,7 @@ export function relayHttpForward(req, res, stripOverage = false) {
   });
   upstreamReq.on('error', (/** @type {CodedError} */ err) => {
     if (err.code === FORBIDDEN_FORWARD) { refuse(err.message); return; }
-    console.error(`[TeamClaude] HTTP forward to ${target.host} failed:`, describeConnectError(err));
+    console.error(`[Octopus] HTTP forward to ${target.host} failed:`, describeConnectError(err));
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'Upstream unreachable' } }));
@@ -1639,7 +1639,7 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
       if (blockedBy) {
         if (!res.headersSent) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `Model "${model}" is blocked by teamclaude (matched "${blockedBy}").` } }));
+          res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: `Model "${model}" is blocked by octopus (matched "${blockedBy}").` } }));
         }
         recordEarlyOutcome(accountManager, { pinKey }, req.url, true);
         openEntry = null;   // this path owns the close below; the outer catch must not repeat it
@@ -1705,7 +1705,7 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
         // through a console that may be the thing that failed. Here it also
         // decides which error gets reported at all, since a throw from the
         // report would carry the render failure outward in place of this one.
-        reportFailure('[TeamClaude] Unhandled error:', err);
+        reportFailure('[Octopus] Unhandled error:', err);
         if (!res.headersSent) {
           res.writeHead(502, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'Internal proxy error' } }));
@@ -1730,7 +1730,7 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
         if (!hideActivity) hooks.onRequestEnd?.(reqId, { method: req.method, path: req.url, account: ctx.account, status: ctx.status, model: ctx.model, effort, sessionId, pinned: ctx.pinnedIndex != null, client });
       }
     } catch (err) {
-      reportFailure('[TeamClaude] Unhandled error:', err);
+      reportFailure('[Octopus] Unhandled error:', err);
       // Close the activity entry. Only the inner path has a `finally`, so a
       // throw above it opens a row that nothing else will ever close, and every
       // consumer holds an open row indefinitely: the TUI keeps it in `active`
@@ -1756,7 +1756,7 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
             model: null, sessionId: entry.sessionId, pinned: false,
           });
         } catch (hookErr) {
-          reportFailure('[TeamClaude] activity hook failed while closing a request:', hookErr);
+          reportFailure('[Octopus] activity hook failed while closing a request:', hookErr);
         }
       }
       // The code above the inner try (the egress hold, the pin parsing, body
@@ -1975,7 +1975,7 @@ function relayStream(req, res, upstream, sx, stripOverage = false) {
   });
 
   upstreamReq.on('error', (err) => {
-    console.error('[TeamClaude] Remote Control relay error:', describeConnectError(err));
+    console.error('[Octopus] Remote Control relay error:', describeConnectError(err));
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'Upstream unreachable' } }));
@@ -2080,7 +2080,7 @@ export function upgradeTarget(upstream, url) {
 export function relayUpgrade(req, socket, head, upstream, sx, { client = null, clientUsage = null, log = console.log, stripOverage = false } = {}) {
   const target = upgradeTarget(upstream, req.url);
   if (!target) {
-    log(`[TeamClaude] WebSocket upgrade refused: request target ${JSON.stringify(safeLine(req.url, 128))} is not a path on the upstream`);
+    log(`[Octopus] WebSocket upgrade refused: request target ${JSON.stringify(safeLine(req.url, 128))} is not a path on the upstream`);
     try { socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); } catch { /* already gone */ }
     socket.destroy();
     return;
@@ -2125,8 +2125,8 @@ export function relayUpgrade(req, socket, head, upstream, sx, { client = null, c
     upstreamSocket.pipe(socket);
     clientUsage?.record(client, { connections: 1 });
     const opened = Date.now();
-    log(`[TeamClaude] ${tag}WebSocket ${path} connected`);
-    socket.once('close', () => log(`[TeamClaude] ${tag}WebSocket ${path} closed (${((Date.now() - opened) / 1000).toFixed(1)}s)`));
+    log(`[Octopus] ${tag}WebSocket ${path} connected`);
+    socket.once('close', () => log(`[Octopus] ${tag}WebSocket ${path} closed (${((Date.now() - opened) / 1000).toFixed(1)}s)`));
     // An upgraded socket defaults to half-open: the peer's FIN only ends the
     // READABLE side ('end'), it does NOT destroy the socket or fire 'close' —
     // so without this, one side hanging up (dropped wifi, killed CLI) leaves
@@ -2149,7 +2149,7 @@ export function relayUpgrade(req, socket, head, upstream, sx, { client = null, c
   // client socket hung with no answer until it timed out, and nothing was
   // logged. Relay the status so the client sees the refusal it was given.
   upstreamReq.on('response', (upstreamRes) => {
-    log(`[TeamClaude] ${tag}WebSocket ${path} refused by upstream (${upstreamRes.statusCode})`);
+    log(`[Octopus] ${tag}WebSocket ${path} refused by upstream (${upstreamRes.statusCode})`);
     const headerLines = Object.entries(upstreamRes.headers)
       .filter(([k]) => !CONNECTION_SPECIFIC_HEADERS.has(k.toLowerCase()) && k.toLowerCase() !== 'content-length')
       .filter(([k]) => !(stripOverage && isOverageHeader(k)))
@@ -2162,7 +2162,7 @@ export function relayUpgrade(req, socket, head, upstream, sx, { client = null, c
   });
 
   upstreamReq.on('error', (err) => {
-    console.error('[TeamClaude] Remote Control WebSocket relay error:', describeConnectError(err));
+    console.error('[Octopus] Remote Control WebSocket relay error:', describeConnectError(err));
     socket.destroy();
   });
   socket.on('error', () => upstreamReq.destroy());
@@ -2240,7 +2240,7 @@ async function relayRaw(req, res, upstream, sx, maxBodyBytes = DEFAULT_MAX_BODY_
     res.writeHead(upstreamRes.status, responseHeaders);
     res.end(responseBody);
   } catch (err) {
-    console.error('[TeamClaude] Raw relay error:', describeConnectError(err));
+    console.error('[Octopus] Raw relay error:', describeConnectError(err));
     if (!res.headersSent) {
       res.writeHead(502, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ type: 'error', error: { type: 'proxy_error', message: 'Upstream unreachable' } }));
@@ -2395,7 +2395,7 @@ function openRequestLog(logDir, _reqId, { level = DEFAULT_LOG_LEVEL, maxBodyByte
   const fail = (err) => {
     if (failed) return;
     failed = true;
-    console.error(`[TeamClaude] Request log ${filename} abandoned: ${err.message}`);
+    console.error(`[Octopus] Request log ${filename} abandoned: ${err.message}`);
   };
   ws.on('error', fail);
   const write = (s) => {
@@ -2706,9 +2706,9 @@ export function exhaustedMessage(candidates, model, retryAfter) {
     return `${list.length === 1 ? 'account' : 'accounts'} ${shown}${unnamed ? ` and ${unnamed} more` : ''}`;
   };
   const blockers = [];
-  if (dead.length) blockers.push(`${named(dead)} ${dead.length === 1 ? 'needs' : 'need'} re-login (run: teamclaude login)`);
+  if (dead.length) blockers.push(`${named(dead)} ${dead.length === 1 ? 'needs' : 'need'} re-login (run: octopus login)`);
   if (unreachable.length) {
-    blockers.push(`${named(unreachable)} cannot reach ${unreachable.length === 1 ? 'its' : 'their'} routing proxy (see: teamclaude routing <name>)`);
+    blockers.push(`${named(unreachable)} cannot reach ${unreachable.length === 1 ? 'its' : 'their'} routing proxy (see: octopus routing <name>)`);
   }
 
   // Every account that could take this request is blocked by something a wait
@@ -3015,9 +3015,9 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       if (allEntitlementDenied && ctx.pinnedIndex != null) {
         message = `No account served this request. The pinned account ${names} returned OAuth entitlement denial (${OAUTH_ENTITLEMENT_ERROR_CODE}). An explicit pin targets that account exactly; choose a different eligible account or change its organization's OAuth policy.`;
       } else if (allEntitlementDenied) {
-        message = `No account served this request. Every configured account returned OAuth entitlement denial (${OAUTH_ENTITLEMENT_ERROR_CODE}): ${names}. TeamClaude temporarily removed them from automatic rotation; retry after the cooldown or pin a different eligible account.`;
+        message = `No account served this request. Every configured account returned OAuth entitlement denial (${OAUTH_ENTITLEMENT_ERROR_CODE}): ${names}. Octopus temporarily removed them from automatic rotation; retry after the cooldown or pin a different eligible account.`;
       } else {
-        message = `Upstream refused the credential for account ${names} (403). Check the account, then re-add it with: teamclaude login`;
+        message = `Upstream refused the credential for account ${names} (403). Check the account, then re-add it with: octopus login`;
       }
       ctx.status = 502;
       ctx.account = `(${[...rejected].join(', ')} refused)`;
@@ -3110,7 +3110,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       // minute instead of sleeping the full retryAfter (often 3600s).
       const waitMs = Math.min(retryAfter * 1000, ctx.holdBudgetMs, 60_000);
       ctx.holdBudgetMs -= waitMs;
-      console.log(`[TeamClaude] All accounts exhausted — holding connection, retry in ${Math.ceil(waitMs / 1000)}s (${Math.ceil(ctx.holdBudgetMs / 1000)}s budget left)`);
+      console.log(`[Octopus] All accounts exhausted — holding connection, retry in ${Math.ceil(waitMs / 1000)}s (${Math.ceil(ctx.holdBudgetMs / 1000)}s budget left)`);
       await waitForRetry(waitMs, ctx.signal);
       if (clientGone(res)) { ctx.abandoned = true; return; }
       return forwardRequest(req, res, body, accountManager, upstream, retryCount, hooks, reqId, ctx, logDir, sx, route);
@@ -3119,7 +3119,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
     const exhaustedRetries = ctx.exhaustedRetries || 0;
     if (exhaustedRetries < 1 && retryAfter <= INLINE_RETRY_AFTER_MAX_SECONDS) {
       ctx.exhaustedRetries = exhaustedRetries + 1;
-      console.log(`[TeamClaude] All accounts exhausted — waiting ${retryAfter}s before retry`);
+      console.log(`[Octopus] All accounts exhausted — waiting ${retryAfter}s before retry`);
       await waitForRetry(retryAfter * 1000, ctx.signal);
       if (clientGone(res)) { ctx.abandoned = true; return; }
       return forwardRequest(req, res, body, accountManager, upstream, retryCount, hooks, reqId, ctx, logDir, sx, route);
@@ -3209,7 +3209,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
     // reports on (see syncAccountsFromDisk).
     if (!account.threadRefusalReported) {
       account.threadRefusalReported = true;
-      console.error(`[TeamClaude] ${safeLine(account.name, 64)}: refusing message-thread continues (this upstream keeps no thread state; set "messageThreads": true ${account.upstream ? 'on the account' : 'at the top level of the config'} if it does)`);
+      console.error(`[Octopus] ${safeLine(account.name, 64)}: refusing message-thread continues (this upstream keeps no thread state; set "messageThreads": true ${account.upstream ? 'on the account' : 'at the top level of the config'} if it does)`);
     }
     res.writeHead(400, { 'Content-Type': 'application/json', 'x-should-retry': 'false' });
     res.end(JSON.stringify({
@@ -3398,13 +3398,13 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
         // selection skip it for Fable requests only. A general rejection spends a
         // shared bucket, so hold the whole account for its reset window.
         if (fableRejected) {
-          console.log(`[TeamClaude] Fable weekly exhausted on "${account.name}" — switching account for this Fable request`);
+          console.log(`[Octopus] Fable weekly exhausted on "${account.name}" — switching account for this Fable request`);
         } else if (codexFamilyRejected) {
           // The same shape as the Fable case: this request moves to another
           // account and the account itself is left alone. Unlike Fable, selection
           // does not yet skip the account for this model family afterwards, so a
           // later request for it pays one refusal here before it rotates.
-          console.log(`[TeamClaude] ${safeLine(spentCodexWindows.join(', '), 80)} spent on "${account.name}" — switching account for this request`);
+          console.log(`[Octopus] ${safeLine(spentCodexWindows.join(', '), 80)} spent on "${account.name}" — switching account for this request`);
         } else {
           const hold = Math.min(Math.max(retryAfter, 1), 3600);
           // Name the spent window when the headers said which: "which one" is
@@ -3413,7 +3413,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
           // label carries upstream's own text, so it goes through safeLine.
           const spent = spentCodexWindows.length
             ? ` (${safeLine(spentCodexWindows.join(', '), 80)} spent)` : '';
-          console.log(`[TeamClaude] Quota rejection (429) on "${account.name}"${spent} — throttling ${hold}s and switching account`);
+          console.log(`[Octopus] Quota rejection (429) on "${account.name}"${spent} — throttling ${hold}s and switching account`);
           accountManager.markRateLimited(account.index, hold);
         }
         ctx.tried.add(account.index);
@@ -3499,7 +3499,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
           ctx.rateLimitHopSharedExit = !routed && !alt.routing;
           ctx.hopTo = alt.index;
           ctx.tried.add(account.index);
-          console.log(`[TeamClaude] Rate-limit 429 on "${account.name}" — failing over once to idle account "${alt.name}"`);
+          console.log(`[Octopus] Rate-limit 429 on "${account.name}" — failing over once to idle account "${alt.name}"`);
           if (clientGone(res)) { ctx.abandoned = true; return; }
           return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
         }
@@ -3540,32 +3540,32 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
           && !res.headersSent && !clientGone(res) && !ctx.signal?.aborted) {
           // Once per request: a retry that is refused too has made the point.
           ctx.requestScopedRetried = true;
-          console.log(`[TeamClaude] 429 followed the request onto "${account.name}" with no rate-limit headers — retrying it once on the same account in ${retryDelayMs}ms`
+          console.log(`[Octopus] 429 followed the request onto "${account.name}" with no rate-limit headers — retrying it once on the same account in ${retryDelayMs}ms`
             + (refusal ? ` (${safeLine(refusal)})` : ''));
           await waitForRetry(retryDelayMs, ctx.signal);
           if (clientGone(res)) { ctx.abandoned = true; return; }
           ctx.hopTo = account.index;
           return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
         }
-        console.log(`[TeamClaude] 429 followed the request onto "${account.name}" with no rate-limit headers — it is about the request, not the accounts; returning it to the client`
+        console.log(`[Octopus] 429 followed the request onto "${account.name}" with no rate-limit headers — it is about the request, not the accounts; returning it to the client`
           + (refusal ? ` (${safeLine(refusal)})` : ''));
       } else if (ctx.rateLimitHopped) {
         // Second 429 this request, on a different account. Say so once: the
         // operator chasing "why is my fleet throttled" is looking for exactly
         // this, and it points at the egress IP rather than at the accounts.
         console.log(ctx.rateLimitHopSharedExit
-          ? '[TeamClaude] Second account rate-limited too — the limit looks IP-scoped, not per-account'
+          ? '[Octopus] Second account rate-limited too — the limit looks IP-scoped, not per-account'
             + (sx?.useOn429() ? '' : ' (sx.org mode "429" would retry from a fresh egress IP)')
           // Per-account routing gave the two different exits, so one address
           // being limited is the one thing this cannot be.
-          : '[TeamClaude] Second account rate-limited too. They leave through different exits (per-account routing), so this is not one IP-scoped limit');
+          : '[Octopus] Second account rate-limited too. They leave through different exits (per-account routing), so this is not one IP-scoped limit');
       }
 
       // sx fresh-IP retry (still the same account) takes precedence over waiting.
       // Bounded by retryCount like the inline-wait path below, so a persistently
       // 429ing upstream can't loop forever through sx.
       if (switchingToSx && retryCount < maxRetries) {
-        console.log(`[TeamClaude] 429 on "${account.name}" — retrying via sx.org (fresh egress IP)`);
+        console.log(`[Octopus] 429 on "${account.name}" — retrying via sx.org (fresh egress IP)`);
         if (clientGone(res)) { ctx.abandoned = true; return; }
         return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, nextUseSx);
       }
@@ -3583,7 +3583,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
         const retryDelayMs = resolveHeaderless429RetryDelayMs();
         if (retryDelayMs > 0 && !ctx.rateLimitHopped && !ctx.requestScopedRetried && retryCount < maxRetries) {
           ctx.requestScopedRetried = true;
-          console.log(`[TeamClaude] 429 with no rate-limit headers on "${account.name}" — retrying once in ${retryDelayMs}ms${refusal ? ` (${safeLine(refusal)})` : ''}`);
+          console.log(`[Octopus] 429 with no rate-limit headers on "${account.name}" — retrying once in ${retryDelayMs}ms${refusal ? ` (${safeLine(refusal)})` : ''}`);
           await waitForRetry(retryDelayMs, ctx.signal);
           if (clientGone(res)) { ctx.abandoned = true; return; }
           return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, nextUseSx);
@@ -3602,7 +3602,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       // 429. Bounded by retryCount (maxRetries = account count) so a persistently
       // rate-limited account can't loop forever tying up the connection.
       if (retryAfter <= RATE_LIMIT_ABSORB_MAX_SECONDS && retryCount < maxRetries) {
-        console.log(`[TeamClaude] Rate-limit 429 on "${account.name}" — waiting ${retryAfter}s, retrying same account (no switch)`);
+        console.log(`[Octopus] Rate-limit 429 on "${account.name}" — waiting ${retryAfter}s, retrying same account (no switch)`);
         await waitForRetry(retryAfter * 1000, ctx.signal);
         if (clientGone(res)) { ctx.abandoned = true; return; }
         return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, nextUseSx);
@@ -3611,7 +3611,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       // Longer retry-after (or retries exhausted): don't hold the connection and
       // don't rotate — surface the 429 with retry-after so the client backs off.
       // The pause above keeps other requests off this account meanwhile.
-      console.log(`[TeamClaude] Rate-limit 429 on "${account.name}" — retry-after ${retryAfter}s over inline cap; returning 429 to client (no switch)`);
+      console.log(`[Octopus] Rate-limit 429 on "${account.name}" — retry-after ${retryAfter}s over inline cap; returning 429 to client (no switch)`);
       ctx.status = 429;
       if (!res.headersSent && !clientGone(res)) {
         res.writeHead(429, { 'Content-Type': 'application/json', 'retry-after': String(retryAfter) });
@@ -3654,7 +3654,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
         ctx.serverErrorHopped = true;
         ctx.hopTo = alt.index;
         ctx.tried.add(account.index);
-        console.log(`[TeamClaude] Upstream ${upstreamRes.status} on "${account.name}" — failing over once to "${alt.name}"`);
+        console.log(`[Octopus] Upstream ${upstreamRes.status} on "${account.name}" — failing over once to "${alt.name}"`);
         if (clientGone(res)) { ctx.abandoned = true; return; }
         return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
       }
@@ -3684,7 +3684,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       const cooldown = deniedUntil
         ? `; OAuth entitlement cooldown until ${new Date(deniedUntil).toISOString()}`
         : '';
-      console.error(`[TeamClaude] 403 on "${account.name}"; upstream refused the account credential${cooldown}`);
+      console.error(`[Octopus] 403 on "${account.name}"; upstream refused the account credential${cooldown}`);
       return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
     }
 
@@ -3692,7 +3692,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
         && retryCount < maxRetries && !ctx.reauthed.has(account.index)) {
       ctx.reauthed.add(account.index);
       await upstreamRes.body?.cancel();
-      console.log(`[TeamClaude] 401 on "${account.name}" — token rejected; forcing refresh and retrying`);
+      console.log(`[Octopus] 401 on "${account.name}" — token rejected; forcing refresh and retrying`);
       await accountManager.ensureTokenFresh(account.index, true);
       if (clientGone(res)) { ctx.abandoned = true; return; }
       return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
@@ -3724,7 +3724,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       }
       (ctx.credentialRejected ??= new Set()).add(account.name);
       ctx.tried.add(account.index);
-      console.error(`[TeamClaude] 401 on "${safeLine(account.name, 64)}"; failing over to another account`);
+      console.error(`[Octopus] 401 on "${safeLine(account.name, 64)}"; failing over to another account`);
       if (clientGone(res)) { ctx.abandoned = true; return; }
       return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
     }
@@ -3767,7 +3767,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
           ctx.streamFailureHopped = true;
           ctx.hopTo = alt.index;
           ctx.tried.add(account.index);
-          console.log(`[TeamClaude] Stream failed inside a ${upstreamRes.status} on "${account.name}" (${peeked.failureCode}) — failing over once to "${alt.name}"`);
+          console.log(`[Octopus] Stream failed inside a ${upstreamRes.status} on "${account.name}" (${peeked.failureCode}) — failing over once to "${alt.name}"`);
           if (clientGone(res)) { ctx.abandoned = true; return; }
           return forwardRequest(req, res, body, accountManager, upstream, retryCount + 1, hooks, reqId, ctx, logDir, sx, route);
         }
@@ -3867,15 +3867,15 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
     // of rotation briefly so the requests behind this one do not each pay the
     // same connect failure, and fail this one over below (isTransientUpstreamError).
     const routingFailed = isRoutingFailure(err);
-    if (clientLeft) console.log(`[TeamClaude] Client disconnected while waiting on "${account.name}" — upstream request cancelled`);
-    else if (overloaded) console.error(`[TeamClaude] Upstream admission queue full (${describeConnectError(err)}) — 503 to the client, no account rotation`);
+    if (clientLeft) console.log(`[Octopus] Client disconnected while waiting on "${account.name}" — upstream request cancelled`);
+    else if (overloaded) console.error(`[Octopus] Upstream admission queue full (${describeConnectError(err)}) — 503 to the client, no account rotation`);
     else if (routingFailed) {
       const until = accountManager.markRoutingFailed(account.index);
       const hold = until ? `; out of rotation for ${Math.max(1, Math.round((until - Date.now()) / 1000))}s` : '';
       // err.message, not describeConnectError: that prefers the cause, which
       // is the bare socket error and does not say a routing proxy was involved.
-      console.error(`[TeamClaude] Routing proxy failed for account "${safeLine(account.name, 64)}" (${describeRouting(account.routing) || 'routing'}): ${safeLine(err instanceof Error ? err.message : String(err), 300)}${hold}`);
-    } else console.error(`[TeamClaude] Upstream error (account "${account.name}"):`, describeConnectError(err));
+      console.error(`[Octopus] Routing proxy failed for account "${safeLine(account.name, 64)}" (${describeRouting(account.routing) || 'routing'}): ${safeLine(err instanceof Error ? err.message : String(err), 300)}${hold}`);
+    } else console.error(`[Octopus] Upstream error (account "${account.name}"):`, describeConnectError(err));
 
     logRequestHead();
     const l = getLog();

@@ -49,7 +49,7 @@ test('route with an unknown subcommand prints usage and exits 1', async () => {
   const configPath = await writeConfig();
   const res = await runCli(configPath, ['route', 'bogus-subcommand']);
   assert.equal(res.code, 1, res.stderr);
-  assert.match(res.stderr, /Usage: teamclaude route/);
+  assert.match(res.stderr, /Usage: octopus route/);
   assert.doesNotMatch(res.stdout + res.stderr, /ReferenceError/);
 });
 

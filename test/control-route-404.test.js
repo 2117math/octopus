@@ -35,7 +35,7 @@ test('an unclaimed /teamclaude/ path is a local 404 and never reaches upstream',
     for (const path of ['/teamclaude/reload', '/teamclaude/statuss', '/teamclaude', '/teamclaude/', '/%74eamclaude/reload', '/teamclaude\\reload']) {
       const { status, body } = await rawGet(port, path);
       assert.equal(status, 404, path);
-      assert.match(JSON.parse(body).error, /unknown teamclaude control route/, path);
+      assert.match(JSON.parse(body).error, /unknown octopus control route/, path);
     }
     assert.equal(upstreamHits, 0, 'nothing was forwarded under a fleet credential');
 

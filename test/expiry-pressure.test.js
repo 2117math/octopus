@@ -16,8 +16,12 @@ function oauth(name, extra = {}) {
 // default parameter would turn `undefined` back into the knob's ON value.
 function mgr(names, opts = {}) {
   const { expiry, ...rest } = opts;
-  return new AccountManager(names.map(n => (typeof n === 'string' ? oauth(n) : n)), 0.98,
+  const am = new AccountManager(names.map(n => (typeof n === 'string' ? oauth(n) : n)), 0.98,
     'expiry' in opts ? { expiryRouting: expiry, ...rest } : rest);
+  // [Octopus local patch] _pickLeastLoadedEven ranks least weekly used ahead of
+  // sessions and pressure. These tests exercise the terms after it, so neutralize it.
+  am._rankedWeeklyUsed = () => 0;
+  return am;
 }
 
 // The knob as these tests spell it, so no call site can mean "off" by omission.

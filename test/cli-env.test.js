@@ -72,7 +72,7 @@ test('--mitm overrides a base-url default, and the hint names the flag', async (
   const result = await runEnv(['--mitm'], { config: { defaultClientMode: 'base-url' } });
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /^export HTTPS_PROXY=http:\/\/127\.0\.0\.1:3456$/m);
-  assert.match(result.stderr, /teamclaude env --mitm/);
+  assert.match(result.stderr, /octopus env --mitm/);
 });
 
 test('env rejects contradictory mode flags without writing to stdout', async () => {

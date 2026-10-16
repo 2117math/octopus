@@ -144,7 +144,7 @@ export function thresholdTable(value) {
   // nothing ever asks about, while the threshold in force stayed the default
   // and nothing said why (#425).
   if (Array.isArray(value)) {
-    console.error('[TeamClaude] switchThreshold is an array in the config — expected a number or an object keyed by bucket; using the default');
+    console.error('[Octopus] switchThreshold is an array in the config — expected a number or an object keyed by bucket; using the default');
     return { default: DEFAULT_SWITCH_THRESHOLD };
   }
   if (value && typeof value === 'object') {

@@ -127,9 +127,9 @@ import {
 // the switch, so a const declared under the switch is still in the temporal
 // dead zone when the command body runs — keep them above the dispatch.
 const ROUTE_USAGE = [
-  'Usage: teamclaude route [list]',
-  '       teamclaude route add <name> --match "<glob>[,<glob>]" [--accounts "<name-or-index>[,...]"] [--bucket <quota-bucket>] [--color <name>]',
-  '       teamclaude route rm <name>',
+  'Usage: octopus route [list]',
+  '       octopus route add <name> --match "<glob>[,<glob>]" [--accounts "<name-or-index>[,...]"] [--bucket <quota-bucket>] [--color <name>]',
+  '       octopus route rm <name>',
   '',
   'A route pins model ids matching its globs to an exclusive set of accounts.',
   'Omit --accounts to route to all accounts (e.g. just to override --bucket).',
@@ -138,22 +138,22 @@ const ROUTE_USAGE = [
 ].join('\n');
 
 const THRESHOLD_USAGE = [
-  'Usage: teamclaude threshold                 (show the current thresholds)',
-  '       teamclaude threshold <1-100>         (one number for every bucket)',
-  '       teamclaude threshold <bucket>=<1-100> [...]',
-  '       teamclaude threshold <bucket>=default (drop that bucket)',
+  'Usage: octopus threshold                 (show the current thresholds)',
+  '       octopus threshold <1-100>         (one number for every bucket)',
+  '       octopus threshold <bucket>=<1-100> [...]',
+  '       octopus threshold <bucket>=default (drop that bucket)',
   '',
   'The utilization at which rotation stops sending work to an account. Tenths of',
   'a percent are kept, as on the TUI settings screen. Changes apply to a running',
   'server immediately.',
 ].join('\n');
 
-const DISTRIBUTE_USAGE = 'Usage: teamclaude distribute <on|off|adaptive>';
+const DISTRIBUTE_USAGE = 'Usage: octopus distribute <on|off|adaptive>';
 
 const ROUTING_USAGE = [
-  'Usage: teamclaude routing <account-name|email> [--check]      (show the account\'s routing; --check tests it)',
-  '       teamclaude routing <account-name|email> <url>          (set it; --no-check skips the proxy test)',
-  '       teamclaude routing <account-name|email> none           (clear it)',
+  'Usage: octopus routing <account-name|email> [--check]      (show the account\'s routing; --check tests it)',
+  '       octopus routing <account-name|email> <url>          (set it; --no-check skips the proxy test)',
+  '       octopus routing <account-name|email> none           (clear it)',
   '',
   'One account\'s own egress proxy: EVERY connection made for that account —',
   'completions, token refresh, profile and quota — tunnels through it, and no',
@@ -166,10 +166,10 @@ const ROUTING_USAGE = [
 ].join('\n');
 
 const CALLBACK_USAGE = [
-  'Usage: teamclaude callback login [--no-browser] [--force]   Sign this install in to callback.net',
-  '       teamclaude callback status                            Show who is signed in',
-  '       teamclaude callback sync                              Reconcile the running server with the credential store now',
-  '       teamclaude callback logout                            Revoke the session and forget it',
+  'Usage: octopus callback login [--no-browser] [--force]   Sign this install in to callback.net',
+  '       octopus callback status                            Show who is signed in',
+  '       octopus callback sync                              Reconcile the running server with the credential store now',
+  '       octopus callback logout                            Revoke the session and forget it',
 ].join('\n');
 
 const args = process.argv.slice(2);
@@ -342,10 +342,10 @@ async function serverCommand() {
   if (config.accounts.length === 0 && !syncMayFill) {
     console.error('No accounts configured.\n');
     console.error('Add an account first:');
-    console.error('  teamclaude import           Import from Claude Code');
-    console.error('  teamclaude login            OAuth login via browser');
-    console.error('  teamclaude login --api      Add an API key (last resort by default; --priority <n>)');
-    console.error('  teamclaude callback login   Sign in to callback.net and take the accounts of your other installs');
+    console.error('  octopus import           Import from Claude Code');
+    console.error('  octopus login            OAuth login via browser');
+    console.error('  octopus login --api      Add an API key (last resort by default; --priority <n>)');
+    console.error('  octopus callback login   Sign in to callback.net and take the accounts of your other installs');
     process.exit(1);
   }
 
@@ -354,7 +354,7 @@ async function serverCommand() {
     console.error('No valid accounts after initialization');
     process.exit(1);
   }
-  if (syncMayFill) console.log('[TeamClaude] No accounts configured; signed in to callback.net, so the credential store will be checked for them');
+  if (syncMayFill) console.log('[Octopus] No accounts configured; signed in to callback.net, so the credential store will be checked for them');
 
   // `accounts[].models` (#74) is superseded by the `routes` table (#86). Routes
   // do the same job with glob matching, several accounts per rule and a bucket
@@ -366,7 +366,7 @@ async function serverCommand() {
   for (const acct of config.accounts) {
     if (!acct.models?.length) continue;
     const route = { name: acct.name, match: acct.models, accounts: [acct.name] };
-    console.error(`[TeamClaude] Deprecated: account "${acct.name}" uses "models" — replace it with a routes entry: ${JSON.stringify(route)}`);
+    console.error(`[Octopus] Deprecated: account "${acct.name}" uses "models" — replace it with a routes entry: ${JSON.stringify(route)}`);
   }
 
   const threshold = config.switchThreshold || 0.98;
@@ -379,7 +379,7 @@ async function serverCommand() {
   try {
     adaptive = validateAdaptiveConfig(config.adaptiveDistribution);
   } catch (err) {
-    console.error(`[TeamClaude] Bad adaptiveDistribution setting in ${getConfigPath()}: ${err.message}`);
+    console.error(`[Octopus] Bad adaptiveDistribution setting in ${getConfigPath()}: ${err.message}`);
     process.exit(1);
   }
   const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config) });
@@ -392,7 +392,7 @@ async function serverCommand() {
   // state (passive — we never call the API to re-learn it). Stale windows are
   // cleared automatically on first use by _clearExpiredQuotas.
   const savedState = await loadState().catch(err => {
-    console.error(`[TeamClaude] Could not read saved state: ${err.message}`);
+    console.error(`[Octopus] Could not read saved state: ${err.message}`);
     return null;
   });
   if (savedState?.quota) accountManager.restoreQuotaState(savedState.quota);
@@ -411,7 +411,7 @@ async function serverCommand() {
   // Periodically persist quota (and once more on shutdown) to the state file.
   const persistQuotaState = () =>
     saveState({ quota: accountManager.exportQuotaState(), clients: clientUsage.exportState(), usageDimensions: dimensionUsage.exportState() })
-      .catch(err => console.error(`[TeamClaude] Failed to save quota state: ${err.message}`));
+      .catch(err => console.error(`[Octopus] Failed to save quota state: ${err.message}`));
   let quotaSaveInterval = null;
 
   // An account admitted from somewhere other than this install's config: the
@@ -425,7 +425,7 @@ async function serverCommand() {
     const idx = accountManager.addAccount(entry);
     atomicConfigUpdate((/** @type {any} */ diskConfig) => {
       if (!diskConfig.accounts.some((/** @type {any} */ a) => sameIdentity(a, entry))) diskConfig.accounts.push(entry);
-    }).catch((/** @type {any} */ err) => console.error(`[TeamClaude] Failed to save an account added from callback.net: ${err.message}`));
+    }).catch((/** @type {any} */ err) => console.error(`[Octopus] Failed to save an account added from callback.net: ${err.message}`));
     return idx;
   };
 
@@ -443,7 +443,7 @@ async function serverCommand() {
     }
     atomicConfigUpdate((/** @type {any} */ diskConfig) => {
       diskConfig.accounts = diskConfig.accounts.filter((/** @type {any} */ a) => (entryId ? a.id !== entryId : !sameIdentity(a, account)));
-    }).catch((/** @type {any} */ err) => console.error(`[TeamClaude] Failed to save the removal of "${account.name}": ${err.message}`));
+    }).catch((/** @type {any} */ err) => console.error(`[Octopus] Failed to save the removal of "${account.name}": ${err.message}`));
   };
 
   // Credential sync through callback.net: active only while this install is
@@ -494,7 +494,7 @@ async function serverCommand() {
         diskConfig.accounts[cfgIdx].refreshToken = newTokens.refreshToken;
         diskConfig.accounts[cfgIdx].expiresAt = newTokens.expiresAt;
       }
-    }).catch(err => console.error(`[TeamClaude] Failed to save refreshed token: ${err.message}`));
+    }).catch(err => console.error(`[Octopus] Failed to save refreshed token: ${err.message}`));
     // And to the credential store, when signed in. Not awaited: the disk
     // write above is the one that must land; the store follows.
     credentialSync.onLocalTokens(idx, newTokens).catch(() => {});
@@ -537,7 +537,7 @@ async function serverCommand() {
   const sx = new SxManager({ log: line => console.error(line) });
   if (config.sx?.apiKey) {
     const r = await sx.configure(config.sx.apiKey, config.sx.mode);
-    if (!r.ok) console.error(`[TeamClaude] sx.org disabled: ${r.error}`);
+    if (!r.ok) console.error(`[Octopus] sx.org disabled: ${r.error}`);
   } else if (config.sx?.mode) {
     await sx.setMode(config.sx.mode);
   }
@@ -772,14 +772,14 @@ async function serverCommand() {
   if (!tui && activityLogPath) {
     // 0600, matching the request log and the config (see tui.js for why).
     const aStream = createWriteStream(activityLogPath, { flags: 'a', mode: 0o600 });
-    aStream.on('error', err => process.stderr.write(`[TeamClaude] activity log error: ${err.message}\n`));
+    aStream.on('error', err => process.stderr.write(`[Octopus] activity log error: ${err.message}\n`));
     const ts = () => new Date().toLocaleTimeString('en-US', { hour12: false });
     const writeActivity = msg => {
       // Strip [TeamClaude] prefix to match TUI behaviour. Sanitized because a
       // log line is one line: a value carrying a newline would otherwise write
       // a second entry that reads as genuine, and this file is what deployments
       // join against to attribute traffic to a person.
-      aStream.write(`${ts()}  ${sanitizeText(msg.replace(/^\[TeamClaude\]\s*/, ''))}\n`);
+      aStream.write(`${ts()}  ${sanitizeText(msg.replace(/^\[Octopus\]\s*/, ''))}\n`);
     };
     // Capture request completions via the hook
     const inFlight = new Map();
@@ -914,18 +914,18 @@ async function serverCommand() {
     // Bind succeeded: stop treating errors as listen failures, but keep a
     // benign runtime handler so a later 'error' is logged rather than thrown.
     server.removeListener('error', onListenError);
-    server.on('error', err => console.error(`[TeamClaude] Server error: ${err.message}`));
+    server.on('error', err => console.error(`[Octopus] Server error: ${err.message}`));
     // Announce an egress proxy, especially one inherited from the environment:
     // it changes where every upstream byte goes, and a value nobody typed here
     // should never be in force silently.
     const egressProxy = getUpstreamProxy();
     if (egressProxy.proxy) {
       const via = egressProxy.source.startsWith('env:') ? ` (from ${egressProxy.source.slice(4)})` : '';
-      console.log(`[TeamClaude] Upstream proxy: ${describeProxy(egressProxy.proxy)}${via}`);
+      console.log(`[Octopus] Upstream proxy: ${describeProxy(egressProxy.proxy)}${via}`);
     } else if (egressProxy.source === 'self') {
       // Almost always a shell that ran `eval "$(teamclaude env)"` before starting
       // the server. Silently going direct is right; saying nothing is not.
-      console.log(`[TeamClaude] Upstream proxy: direct — ${describeSelfProxy(egressProxy)}`);
+      console.log(`[Octopus] Upstream proxy: direct — ${describeSelfProxy(egressProxy)}`);
     }
     if (tui) {
       const held = earlyConsole?.release() ?? [];
@@ -940,7 +940,7 @@ async function serverCommand() {
       const sep = '='.repeat(60);
       console.log('');
       console.log(sep);
-      console.log('  TeamClaude Proxy');
+      console.log('  Octopus Proxy');
       console.log(sep);
       console.log(`  Bind:       ${bindHost}:${port}${bindHost === '127.0.0.1' ? ' (localhost only)' : ' (reachable off-box — ensure proxy.apiKey is set)'}`);
       console.log(`  Accounts:   ${accounts.length}`);
@@ -951,8 +951,8 @@ async function serverCommand() {
         console.log(`  [${i + 1}] ${a.name} (${a.type})`);
       });
       console.log('');
-      console.log('  Run Claude through proxy:  teamclaude run');
-      console.log('  Show env vars:             teamclaude env');
+      console.log('  Run Claude through proxy:  octopus run');
+      console.log('  Show env vars:             octopus env');
       console.log(sep);
       console.log('');
     }
@@ -982,7 +982,7 @@ async function serverCommand() {
   // like the config warnings in config-ops.js, rather than silently leaving a
   // budget unenforced.
   if (!(config.quotaProbeSeconds > 0) && accountManager.accounts.some(a => a.maxSpend != null)) {
-    console.error('[TeamClaude] accounts[].maxSpend is set but the quota probe is off (quotaProbeSeconds = 0) — the spend figure it is judged against is only refreshed by the probe, so the cap only binds after a manual `p` refresh; run `teamclaude probe <seconds>`');
+    console.error('[Octopus] accounts[].maxSpend is set but the quota probe is off (quotaProbeSeconds = 0) — the spend figure it is judged against is only refreshed by the probe, so the cap only binds after a manual `p` refresh; run `octopus probe <seconds>`');
   }
 
   // Start the opt-in keep-warm scheduler. Interval mode runs relative to server
@@ -1019,7 +1019,7 @@ async function serverCommand() {
     shuttingDown = true;
     try { tui?.stop(); } catch { /* terminal already restored */ }
     stopTitle();
-    if (!tui) console.log('\n[TeamClaude] Shutting down...');
+    if (!tui) console.log('\n[Octopus] Shutting down...');
     prober?.stop();
     warmer?.stop();
     credentialSync.stop();
@@ -1394,7 +1394,7 @@ async function loginApiCommand() {
   });
   console.log(`Added API key account "${name}" at priority ${priority}${routing ? ` (routed via ${describeRouting(routing)})` : ''}`);
   if (priority === APIKEY_DEFAULT_PRIORITY) {
-    console.log(`A last resort: the key serves only while every account ahead of it is spent, and rotation leaves it as soon as one of them has quota again. \`teamclaude priority ${name} 0\` rotates it like the others.`);
+    console.log(`A last resort: the key serves only while every account ahead of it is spent, and rotation leaves it as soon as one of them has quota again. \`octopus priority ${name} 0\` rotates it like the others.`);
   }
   console.log(`Saved to ${getConfigPath()}`);
   await notifyRunningServer(config);
@@ -1420,8 +1420,8 @@ async function loginOAuthCommand({ pasteOnly = false } = {}) {
     console.error(`OAuth login failed: ${sanitizeText(err?.message || err)}`);
     console.error('');
     console.error('Alternatives:');
-    console.error('  teamclaude import        Import from existing Claude Code credentials');
-    console.error('  teamclaude login --api   Add an API key instead');
+    console.error('  octopus import        Import from existing Claude Code credentials');
+    console.error('  octopus login --api   Add an API key instead');
     process.exit(1);
   }
 
@@ -1442,7 +1442,7 @@ async function envCommand() {
   // `eval "$(teamclaude env)"` — nor silently create config as a side effect.
   const config = await loadConfig();
   if (!config) {
-    process.stderr.write(`No config found at ${getConfigPath()}. Add an account first: teamclaude login\n`);
+    process.stderr.write(`No config found at ${getConfigPath()}. Add an account first: octopus login\n`);
     process.exit(1);
   }
   const port = config.proxy.port;
@@ -1450,7 +1450,7 @@ async function envCommand() {
   try {
     useMitm = resolveClientMode(config, args.slice(1)) === 'mitm';
   } catch (/** @type {any} */ err) {
-    process.stderr.write(`teamclaude env: ${err.message}\n`);
+    process.stderr.write(`octopus env: ${err.message}\n`);
     process.exit(1);
   }
 
@@ -1475,13 +1475,13 @@ async function envCommand() {
     if (!useMitm) lines.push(...clearSelfProxyEnvLines(port));
   } catch (err) {
     // A bad proxy.port. Nothing reaches stdout: the shell is eval'ing it.
-    process.stderr.write(`teamclaude env: ${err.message} (in ${getConfigPath()})\n`);
+    process.stderr.write(`octopus env: ${err.message} (in ${getConfigPath()})\n`);
     process.exit(1);
   }
   process.stdout.write(`${lines.join('\n')}\n`);
 
   const mode = useMitm ? 'MITM forward-proxy' : 'base-URL';
-  process.stderr.write(`# TeamClaude env: ${mode} mode, localhost:${port}\n`);
+  process.stderr.write(`# Octopus env: ${mode} mode, localhost:${port}\n`);
   if (account) {
     process.stderr.write(`# pinned to account "${account}" (TC_ACCT)\n`);
     // Warn, don't fail: the account list can change before the shell is used,
@@ -1491,10 +1491,10 @@ async function envCommand() {
     }
   }
   // The flag that reproduces this mode whatever the config's default says.
-  process.stderr.write(`# apply to this shell:  eval "$(teamclaude env${useMitm ? ' --mitm' : ' --no-mitm'})"\n`);
+  process.stderr.write(`# apply to this shell:  eval "$(octopus env${useMitm ? ' --mitm' : ' --no-mitm'})"\n`);
   process.stderr.write(`# default mode is ${config.defaultClientMode === 'base-url' ? 'base-URL' : 'MITM'} (config defaultClientMode; the TUI settings screen toggles it)\n`);
   if (!(await isProxyUp(port))) {
-    process.stderr.write(`# note: proxy not running on port ${port} — start it with: teamclaude server\n`);
+    process.stderr.write(`# note: proxy not running on port ${port} — start it with: octopus server\n`);
   }
   if (config.proxy?.apiKey) {
     process.stderr.write(`# remote (non-loopback) clients must also present the proxy key: ANTHROPIC_API_KEY=<proxy.apiKey> (base-URL), or http://<key>@host:${port} (MITM)\n`);
@@ -1518,7 +1518,7 @@ async function runCommand() {
   try {
     useMitm = resolveClientMode(config, tcFlags) === 'mitm';
   } catch (/** @type {any} */ err) {
-    console.error(`[TeamClaude] ${err.message}`);
+    console.error(`[Octopus] ${err.message}`);
     process.exit(1);
   }
   const autoFallback = tcFlags.includes('--auto-fallback');
@@ -1563,13 +1563,13 @@ async function runCommand() {
       const inheritedNoProxy = [process.env.NO_PROXY, process.env.no_proxy];
       env.NO_PROXY = env.no_proxy = mergeNoProxy(...inheritedNoProxy);
       if (inheritedNoProxy.some(bypassesAllHosts)) {
-        console.error('[TeamClaude] NO_PROXY=* ignored: it would send api.anthropic.com around the proxy (no rotation). Use --no-mitm for a direct launch.');
+        console.error('[Octopus] NO_PROXY=* ignored: it would send api.anthropic.com around the proxy (no rotation). Use --no-mitm for a direct launch.');
       }
       env.NODE_EXTRA_CA_CERTS = caPath;
-      if (tcAcct) console.error(`[TeamClaude] Pinned to account "${tcAcct}" (TC_ACCT)`);
+      if (tcAcct) console.error(`[Octopus] Pinned to account "${tcAcct}" (TC_ACCT)`);
       else if (pinnedBase) {
-        console.error('[TeamClaude] Account pin in ANTHROPIC_BASE_URL ignored: MITM mode does not use a base URL.');
-        console.error('[TeamClaude] Use TC_ACCT=<account> instead — it pins in both modes.');
+        console.error('[Octopus] Account pin in ANTHROPIC_BASE_URL ignored: MITM mode does not use a base URL.');
+        console.error('[Octopus] Use TC_ACCT=<account> instead — it pins in both modes.');
       }
       delete env.ANTHROPIC_BASE_URL;
     } else {
@@ -1581,16 +1581,16 @@ async function runCommand() {
       // pointing at this proxy is preserved for configs written against 1.1.10.
       if (tcAcct) {
         env.ANTHROPIC_BASE_URL = `http://localhost:${port}/tc-acct/${encodePinComponent(tcAcct)}`;
-        console.error(`[TeamClaude] Pinned to account "${tcAcct}" (TC_ACCT)`);
+        console.error(`[Octopus] Pinned to account "${tcAcct}" (TC_ACCT)`);
       } else if (!pinnedBase) {
         env.ANTHROPIC_BASE_URL = `http://localhost:${port}`;
       }
     }
   } else if (autoFallback) {
-    console.error(`[TeamClaude] Proxy not running on port ${port} — launching claude directly (--auto-fallback; start it with: teamclaude server)`);
+    console.error(`[Octopus] Proxy not running on port ${port} — launching claude directly (--auto-fallback; start it with: octopus server)`);
   } else {
-    console.error(`[TeamClaude] Proxy not running on port ${port}.`);
-    console.error('Start it with: teamclaude server');
+    console.error(`[Octopus] Proxy not running on port ${port}.`);
+    console.error('Start it with: octopus server');
     console.error('Or pass --auto-fallback to launch claude directly (bypassing the proxy) when it is down.');
     process.exit(1);
   }
@@ -1634,7 +1634,7 @@ async function runCommand() {
   // stale local login is the shape of that failure, not proof of it.
   if (result.status && Date.now() - startedAt < LOCAL_LOGIN_HINT_WINDOW_MS && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     const hint = await localLoginHint({ read: importCredentials, expired: isTokenExpired });
-    if (hint) console.error(`[TeamClaude] ${hint}`);
+    if (hint) console.error(`[Octopus] ${hint}`);
   }
 
   // Session over — check for a newer teamclaude and (for a global npm install)
@@ -1694,7 +1694,7 @@ async function statusCommand() {
       process.exit(1);
     }
     console.error('Cannot connect to proxy at localhost:' + config.proxy.port);
-    console.error('Is the server running? Start with: teamclaude server');
+    console.error('Is the server running? Start with: octopus server');
     if (err?.message) console.error(`Details: ${err.message}`);
     process.exit(1);
   }
@@ -1719,7 +1719,7 @@ async function attachCommand() {
   // Checked before connecting: the dashboard needs raw-mode input, and failing
   // on that after a successful poll would be a confusing order to report it in.
   if (!process.stdin.isTTY) {
-    console.error('teamclaude attach needs a terminal. For a one-shot readout use: teamclaude status');
+    console.error('octopus attach needs a terminal. For a one-shot readout use: octopus status');
     process.exit(1);
   }
 
@@ -1729,7 +1729,7 @@ async function attachCommand() {
     first = await control.status(); // fail here, with a usable message, not inside the TUI
   } catch (err) {
     console.error(`Cannot connect to proxy at ${host}:${port}`);
-    console.error('Is the server running? Start with: teamclaude server');
+    console.error('Is the server running? Start with: octopus server');
     if (err?.message) console.error(`Details: ${err.message}`);
     process.exit(1);
   }
@@ -1754,8 +1754,8 @@ async function dashboardCommand() {
   const host = (bound === '0.0.0.0' || bound === '::') ? '127.0.0.1' : bound;
   const dashboardUrl = `http://${host}:${port}/teamclaude/dashboard`;
   if (!(await isProxyUp(port))) {
-    console.error(`[TeamClaude] Proxy not running on port ${port}.`);
-    console.error('Start it with: teamclaude server   (or: teamclaude service install)');
+    console.error(`[Octopus] Proxy not running on port ${port}.`);
+    console.error('Start it with: octopus server   (or: octopus service install)');
     process.exit(1);
   }
 
@@ -1789,7 +1789,7 @@ async function switchCommand() {
       const data = res.ok ? await res.json().catch(() => null) : null;
       if (!data || !Array.isArray(data.accounts)) {
         console.error(`Unexpected reply from localhost:${port} (HTTP ${res.status}) — no account list in it.`);
-        console.error('Something is listening there, but it does not answer like this teamclaude version.');
+        console.error('Something is listening there, but it does not answer like this octopus version.');
         process.exit(1);
       }
       if (!data.accounts.length) {
@@ -1803,7 +1803,7 @@ async function switchCommand() {
         const state = a.disabled ? 'disabled' : (a.status && a.status !== 'active' ? a.status : null);
         console.log(`${a.name === data.currentAccount ? '*' : ' '} ${a.name}${state ? `  (${state})` : ''}`);
       }
-      console.log('\nSwitch with: teamclaude switch <name>');
+      console.log('\nSwitch with: octopus switch <name>');
       return;
     }
 
@@ -1834,7 +1834,7 @@ async function switchCommand() {
     }
   } catch (err) {
     console.error('Cannot connect to proxy at localhost:' + port);
-    console.error('Is the server running? Start with: teamclaude server');
+    console.error('Is the server running? Start with: octopus server');
     if (err?.message) console.error(`Details: ${err.message}`);
     process.exit(1);
   }
@@ -1848,7 +1848,7 @@ async function accountsCommand() {
 
   if (config.accounts.length === 0) {
     console.log('No accounts configured.');
-    console.log('Add one with: teamclaude import, teamclaude login, or teamclaude login --api');
+    console.log('Add one with: octopus import, octopus login, or octopus login --api');
     return;
   }
 
@@ -2007,8 +2007,8 @@ async function apiCommand() {
   const path = args[1];
 
   if (!path) {
-    console.error('Usage: teamclaude api <path> [--account NAME] [--method POST] [--data JSON]');
-    console.error('Example: teamclaude api /api/oauth/claude_cli/roles');
+    console.error('Usage: octopus api <path> [--account NAME] [--method POST] [--data JSON]');
+    console.error('Example: octopus api /api/oauth/claude_cli/roles');
     process.exit(1);
   }
 
@@ -2084,8 +2084,8 @@ async function serviceCommand() {
   const sub = args[1] || 'status';
   const kind = serviceKind();
   if (!kind) {
-    console.error(`teamclaude service: no service integration for ${process.platform}`);
-    console.error('Run the proxy yourself with: teamclaude server --headless');
+    console.error(`octopus service: no service integration for ${process.platform}`);
+    console.error('Run the proxy yourself with: octopus server --headless');
     process.exit(1);
   }
   // Carry an explicit config path into the unit: a service started by launchd or
@@ -2097,12 +2097,12 @@ async function serviceCommand() {
   switch (sub) {
     case 'install': {
       const res = await installService({ configPath });
-      if (!res.ok) { console.error(`teamclaude service install failed: ${res.error}`); process.exit(1); }
+      if (!res.ok) { console.error(`octopus service install failed: ${res.error}`); process.exit(1); }
       break;
     }
     case 'uninstall': {
       const res = await uninstallService();
-      if (!res.ok) { console.error(`teamclaude service uninstall failed: ${res.error}`); process.exit(1); }
+      if (!res.ok) { console.error(`octopus service uninstall failed: ${res.error}`); process.exit(1); }
       break;
     }
     case 'print':
@@ -2117,7 +2117,7 @@ async function serviceCommand() {
       break;
     }
     default:
-      console.error('Usage: teamclaude service <install|uninstall|status|print>');
+      console.error('Usage: octopus service <install|uninstall|status|print>');
       process.exit(1);
   }
 }
@@ -2131,7 +2131,7 @@ async function probeCommand() {
   if (arg === undefined) {
     const cur = config.quotaProbeSeconds || 0;
     console.log(cur > 0 ? `Quota probe: every ${cur}s` : 'Quota probe: off (passive only)');
-    console.log('Set with: teamclaude probe <off|seconds>   e.g. teamclaude probe 300');
+    console.log('Set with: octopus probe <off|seconds>   e.g. octopus probe 300');
     return;
   }
 
@@ -2141,7 +2141,7 @@ async function probeCommand() {
   } else {
     seconds = parseInt(arg, 10);
     if (Number.isNaN(seconds) || seconds < 0) {
-      console.error('Usage: teamclaude probe <off|seconds>');
+      console.error('Usage: octopus probe <off|seconds>');
       process.exit(1);
     }
   }
@@ -2167,9 +2167,9 @@ async function warmupCommand() {
     }
     const cur = config.warmupSeconds || 0;
     console.log(cur > 0 ? `Keep-warm: every ${cur}s` : 'Keep-warm: off');
-    console.log('Set with: teamclaude warmup <off|seconds>');
-    console.log('          teamclaude warmup reset HH:MM --timezone Area/City');
-    console.log('          teamclaude warmup rolling HH:MM --timezone Area/City');
+    console.log('Set with: octopus warmup <off|seconds>');
+    console.log('          octopus warmup reset HH:MM --timezone Area/City');
+    console.log('          octopus warmup rolling HH:MM --timezone Area/City');
     console.log('Note: warming spawns a minimal `claude` per idle account and DOES spend a little quota');
     console.log('(unlike the passive quota probe). It only warms accounts whose 5h window is idle.');
     return;
@@ -2180,7 +2180,7 @@ async function warmupCommand() {
     const timezoneFlag = args.indexOf('--timezone', 3);
     const timezone = timezoneFlag >= 0 ? args[timezoneFlag + 1] : null;
     if (!resetTime || !timezone || args.length !== 5 || timezoneFlag !== 3) {
-      console.error(`Usage: teamclaude warmup ${arg} HH:MM --timezone Area/City`);
+      console.error(`Usage: octopus warmup ${arg} HH:MM --timezone Area/City`);
       process.exit(1);
     }
     applyOrExit(() => setWarmupSchedule(config, arg, { resetTime, timezone }));
@@ -2196,7 +2196,7 @@ async function warmupCommand() {
   } else {
     seconds = parseInt(arg, 10);
     if (Number.isNaN(seconds) || seconds < 0) {
-      console.error('Usage: teamclaude warmup <off|seconds>');
+      console.error('Usage: octopus warmup <off|seconds>');
       process.exit(1);
     }
   }
@@ -2227,8 +2227,8 @@ async function thresholdCommand() {
 
   if (!rest.length) {
     printThresholds(config.switchThreshold);
-    console.log('Set with: teamclaude threshold <1-100>   e.g. teamclaude threshold 90');
-    console.log('Per bucket: teamclaude threshold unified7d=90   (=default drops it again)');
+    console.log('Set with: octopus threshold <1-100>   e.g. octopus threshold 90');
+    console.log('Per bucket: octopus threshold unified7d=90   (=default drops it again)');
     return;
   }
 
@@ -2289,7 +2289,7 @@ async function distributeCommand() {
 
   if (arg === undefined) {
     console.log(`Session distribution: ${current}`);
-    console.log('Set with: teamclaude distribute <on|off|adaptive>');
+    console.log('Set with: octopus distribute <on|off|adaptive>');
     console.log('On: each session stays on its account for cache reuse, and new sessions spread');
     console.log('across equal-priority accounts by load. Off: quota-driven rotation only.');
     console.log('Adaptive: spread by remaining weekly credit and load rather than evenly, so the');
@@ -2334,7 +2334,7 @@ async function callbackCommand() {
       try {
         const me = await callbackWhoami();
         console.log(`Already signed in to callback.net as ${describeCallbackUser(me)}.`);
-        console.log('Run `teamclaude callback logout` first, or pass --force to sign in again.');
+        console.log('Run `octopus callback logout` first, or pass --force to sign in again.');
         return;
       } catch (/** @type {any} */ err) {
         // A session the server no longer honours is replaced; anything else
@@ -2386,8 +2386,8 @@ async function callbackCommand() {
     } catch (/** @type {any} */ err) {
       if (err?.loginRequired) {
         console.error((await loadCallbackToken())
-          ? 'The callback.net session has expired. Run `teamclaude callback login`.'
-          : 'Not signed in to callback.net. Run `teamclaude callback login`.');
+          ? 'The callback.net session has expired. Run `octopus callback login`.'
+          : 'Not signed in to callback.net. Run `octopus callback login`.');
       } else {
         console.error(`Could not reach callback.net: ${err?.message || err}`);
       }
@@ -2431,6 +2431,10 @@ async function callbackCommand() {
 }
 
 async function updateCommand() {
+  // [Octopus] Local fork: never fetch from npm (that would replace this copy with the original).
+  console.log('Octopus is a local fork; update by pulling the git repo.');
+  return;
+  // eslint-disable-next-line no-unreachable
   const cur = currentVersion();
   console.log(`Current version: ${cur || 'unknown'}`);
 
@@ -2454,7 +2458,7 @@ async function updateCommand() {
   console.log(`Updating ${info.current} → ${info.latest} …`);
   const ok = await runUpdate(info.latest);
   if (ok) {
-    console.log(`Updated to ${info.latest}. Restart teamclaude to use the new version.`);
+    console.log(`Updated to ${info.latest}. Restart octopus to use the new version.`);
   } else {
     console.error(`Update failed. Try manually: npm install -g ${PKG_NAME}@latest`);
     process.exitCode = 1;
@@ -2487,7 +2491,7 @@ async function removeCommand() {
   const name = args[1];
 
   if (!name) {
-    console.error('Usage: teamclaude remove <account-name|email> [--org <name|uuid>]');
+    console.error('Usage: octopus remove <account-name|email> [--org <name|uuid>]');
     process.exit(1);
   }
 
@@ -2567,8 +2571,8 @@ async function priorityCommand() {
   const name = args[1];
 
   if (!name) {
-    console.error('Usage: teamclaude priority <account-name|email> <n> [--org <name|uuid>]');
-    console.error('       teamclaude priority <account-name|email> --first | --last');
+    console.error('Usage: octopus priority <account-name|email> <n> [--org <name|uuid>]');
+    console.error('       octopus priority <account-name|email> --first | --last');
     console.error('Lower priority is preferred for rotation (default 0).');
     process.exit(1);
   }
@@ -2609,7 +2613,7 @@ async function renameCommand() {
   const newName = args[2];
 
   if (!name || !newName || newName.startsWith('--')) {
-    console.error('Usage: teamclaude rename <account-name|email> <new-name> [--org <name|uuid>]');
+    console.error('Usage: octopus rename <account-name|email> <new-name> [--org <name|uuid>]');
     process.exit(1);
   }
 
@@ -2628,7 +2632,7 @@ async function setDisabledCommand(disabled) {
   const verb = disabled ? 'disable' : 'enable';
 
   if (!name) {
-    console.error(`Usage: teamclaude ${verb} <account-name|email> [--org <name|uuid>]`);
+    console.error(`Usage: octopus ${verb} <account-name|email> [--org <name|uuid>]`);
     process.exit(1);
   }
 
@@ -2721,9 +2725,9 @@ async function routingCommand() {
 // ── help ────────────────────────────────────────────────────
 
 function showHelp() {
-  console.log(`TeamClaude - Multi-account Claude proxy
+  console.log(`Octopus - Multi-account Claude proxy
 
-Usage: teamclaude [command] [options]
+Usage: octopus [command] [options]
 
 Commands:
   server              Start the proxy server (default; --headless to skip the TUI)
@@ -2736,10 +2740,10 @@ Commands:
                       --priority <n> to place it, 0 = level with the rest)
   env [--mitm|--no-mitm]
                       Print export lines to point Claude Code at the proxy, for
-                      'eval "$(teamclaude env)"'. MITM forward-proxy unless the
+                      'eval "$(octopus env)"'. MITM forward-proxy unless the
                       config's defaultClientMode is "base-url"; a flag decides
                       per call. Handy for agent multiplexers that spawn claude
-                      themselves instead of via 'teamclaude run'
+                      themselves instead of via 'octopus run'
   run [--no-mitm] [--auto-fallback] [-- args...]
                       Run Claude Code through the proxy (errors if it's down,
                       unless --auto-fallback launches claude directly instead).
@@ -2795,7 +2799,7 @@ Commands:
   callback status     Show who is signed in to callback.net
   callback sync       Reconcile the running server with the store now
   callback logout     Revoke that session and forget it
-  update              Check npm for a newer teamclaude and install it
+  update              Check npm for a newer octopus and install it
   version             Print the installed version
   help                Show this help
 
@@ -2825,7 +2829,7 @@ Environment:
   TC_ACCT             Pin a session to ONE account, bypassing rotation. Works in
                       both modes. Accepts accountUuid, orgUuid,
                       accountUuid/orgUuid, or a display name/email:
-                        TC_ACCT=me@example.com teamclaude run
+                        TC_ACCT=me@example.com octopus run
                       Prefer a UUID for anything scripted: display names are
                       rewritten when an email gains a second org. Read by 'run'
                       and 'env', then removed from the environment so it never
@@ -2844,7 +2848,7 @@ launched with and without --no-mitm can share one server.
 A running server re-syncs accounts from config on POST /teamclaude/reload
 (local only). add/login/enable/disable/priority trigger it automatically.
 POST /teamclaude/switch {"account": "<name>"} makes one account the preferred
-one, which is what 'teamclaude switch' calls.
+one, which is what 'octopus switch' calls.
 
 MCP endpoint (off by default). With "proxy": { "mcp": "read" } the server
 serves its status, quota and settings as MCP tools at /teamclaude/mcp; "full"
@@ -2868,7 +2872,7 @@ and from sx.org (a specific residential-egress provider with its own policy).
 
 Per-account routing. One account can have its own egress proxy instead: set
 "routing": "socks5h://user:pass@host:1080" on the account, or run
-'teamclaude routing <name> <url>', or pass --routing to login/import. Every
+'octopus routing <name> <url>', or pass --routing to login/import. Every
 connection for that account — forwarding, token refresh, profile, usage and
 quota — tunnels through that proxy with TLS end to end; no other account is
 affected, and the account bypasses both the fleet upstream proxy and sx (its
@@ -2947,7 +2951,7 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
     // it is not a way past a token the upstream refused: suggesting it there
     // would be pointing at the one door this no longer opens.
     const advice = isTokenRejection(profile)
-      ? 'The upstream rejected this token and it could not be refreshed. Run `teamclaude login` to get a fresh one.'
+      ? 'The upstream rejected this token and it could not be refreshed. Run `octopus login` to get a fresh one.'
       : 'Retry with valid credentials, or pass --name to add the account without profile detection.';
     // The TUI shows one line per event, so the advice rides along in the message.
     if (!fatal) throw new Error(`${why}. ${advice}`);
@@ -3204,15 +3208,15 @@ function isProxyUp(port, timeout = 600) {
 
 function handleServerListenError(err, port) {
   if (err.code === 'EADDRINUSE') {
-    console.error(`[TeamClaude] Port ${port} is already in use.`);
-    console.error('Another TeamClaude proxy may already be running.');
-    console.error('Check the existing server with: teamclaude status');
+    console.error(`[Octopus] Port ${port} is already in use.`);
+    console.error('Another Octopus proxy may already be running.');
+    console.error('Check the existing server with: octopus status');
     console.error(`Find the listener with: lsof -nP -iTCP:${port} -sTCP:LISTEN`);
   } else if (err.code === 'EACCES') {
-    console.error(`[TeamClaude] Permission denied while listening on port ${port}.`);
-    console.error('Choose a non-privileged port in the TeamClaude config.');
+    console.error(`[Octopus] Permission denied while listening on port ${port}.`);
+    console.error('Choose a non-privileged port in the Octopus config.');
   } else {
-    console.error(`[TeamClaude] Failed to listen on port ${port}: ${err.message}`);
+    console.error(`[Octopus] Failed to listen on port ${port}: ${err.message}`);
   }
   process.exit(1);
 }

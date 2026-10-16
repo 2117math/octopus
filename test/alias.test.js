@@ -13,7 +13,7 @@ test('aliasLine uses the right syntax per shell (explicit ref)', () => {
   assert.equal(aliasLine('fish', 'teamclaude'), "alias claude 'teamclaude run --'");
 });
 
-test('aliasLine embeds a quoted absolute path when teamclaude is not on PATH', () => {
+test('aliasLine embeds a quoted absolute path when octopus is not on PATH', () => {
   assert.equal(aliasLine('bash', '"/opt/tc/index.js"'), `alias claude='"/opt/tc/index.js" run --'`);
   assert.equal(aliasLine('fish', '"/opt/tc/index.js"'), `alias claude '"/opt/tc/index.js" run --'`);
 });
@@ -48,7 +48,7 @@ test('teamclaudeRef escapes what the shell reads inside double quotes', async ()
   const dir = await mkdtemp(join(tmpdir(), 'tc-path-'));
   const prev = { PATH: process.env.PATH, argv1: process.argv[1] };
   try {
-    process.env.PATH = dir; // no teamclaude on PATH → embed argv[1]
+    process.env.PATH = dir; // no octopus on PATH → embed argv[1]
     process.argv[1] = '/opt/we$ird"dir\\x/index.js';
     assert.equal(teamclaudeRef(), '"/opt/we\\$ird\\"dir\\\\x/index.js"');
   } finally {
@@ -85,11 +85,11 @@ test('teamclaudeRef returns the bare command when it is on PATH', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tc-path-'));
   const prev = process.env.PATH;
   try {
-    const bin = join(dir, 'teamclaude');
+    const bin = join(dir, 'octopus');
     writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
     chmodSync(bin, 0o755);
     process.env.PATH = dir;
-    assert.equal(teamclaudeRef(), 'teamclaude');
+    assert.equal(teamclaudeRef(), 'octopus');
   } finally {
     process.env.PATH = prev;
     await rm(dir, { recursive: true, force: true });
@@ -104,7 +104,7 @@ test('teamclaudeRef falls back to a quoted absolute path when not on PATH', asyn
     const ref = teamclaudeRef();
     assert.match(ref, /^".*"$/);          // quoted
     assert.ok(ref.includes('/'));          // an absolute-ish path, not the bare command
-    assert.notEqual(ref, 'teamclaude');
+    assert.notEqual(ref, 'octopus');
   } finally {
     process.env.PATH = prev;
     await rm(dir, { recursive: true, force: true });

@@ -234,7 +234,7 @@ test('a table keeps its in-range entries and reports the rest by field', async (
 
 test('the account name in the refusal line cannot forge a second log line', async () => {
   const lines = await logged(() => {
-    new AccountManager([oauth('evil\n[TeamClaude] forged', { switchThreshold: 98 })], 0.98);
+    new AccountManager([oauth('evil\n[Octopus] forged', { switchThreshold: 98 })], 0.98);
   });
   const about = lines.filter(l => l.includes('switchThreshold'));
   assert.equal(about.length, 1);

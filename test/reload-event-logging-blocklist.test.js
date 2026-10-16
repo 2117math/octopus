@@ -128,7 +128,7 @@ test('reload hot-applies a blockedModels edit', async () => {
     assert.equal(res.status, 400, JSON.stringify(res.body));
     assert.equal(res.body.type, 'error');
     assert.equal(res.body.error.type, 'invalid_request_error');
-    assert.equal(res.body.error.message, 'Model "claude-zz-blocked" is blocked by teamclaude (matched "*zz-blocked*").');
+    assert.equal(res.body.error.message, 'Model "claude-zz-blocked" is blocked by octopus (matched "*zz-blocked*").');
     assert.equal(hits.length, 1, `a blocked model must not be forwarded, but the stub saw ${hits.length} hit(s)`);
 
     // The status echo reads the same live object, so it must agree with the gate.

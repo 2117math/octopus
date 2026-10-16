@@ -63,7 +63,7 @@ function tmpCache() {
   return join(mkdtempSync(join(tmpdir(), 'tc-upd-')), 'update-check.json');
 }
 
-test('checkForUpdate fetches when uncached and reports an available update', async () => {
+test('checkForUpdate fetches when uncached and reports an available update', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const cachePath = tmpCache();
   let calls = 0;
   const fetchImpl = async () => { calls++; return { ok: true, json: async () => ({ 'dist-tags': { latest: '2.0.0' } }) }; };
@@ -72,7 +72,7 @@ test('checkForUpdate fetches when uncached and reports an available update', asy
   assert.equal(calls, 1);
 });
 
-test('checkForUpdate does NOT hit the network while the cache is fresh', async () => {
+test('checkForUpdate does NOT hit the network while the cache is fresh', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const cachePath = tmpCache();
   let calls = 0;
   const fetchImpl = async () => { calls++; return { ok: true, json: async () => ({ 'dist-tags': { latest: '2.0.0' } }) }; };
@@ -84,7 +84,7 @@ test('checkForUpdate does NOT hit the network while the cache is fresh', async (
   assert.equal(info.updateAvailable, true);
 });
 
-test('checkForUpdate refetches once the interval elapses, and force overrides', async () => {
+test('checkForUpdate refetches once the interval elapses, and force overrides', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const cachePath = tmpCache();
   let calls = 0;
   const fetchImpl = async () => { calls++; return { ok: true, json: async () => ({ 'dist-tags': { latest: '1.0.0' } }) }; };
@@ -95,7 +95,7 @@ test('checkForUpdate refetches once the interval elapses, and force overrides', 
   assert.equal(calls, 3, 'force bypasses the throttle');
 });
 
-test('checkForUpdate reports no update when already on the latest', async () => {
+test('checkForUpdate reports no update when already on the latest', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const cachePath = tmpCache();
   const fetchImpl = async () => ({ ok: true, json: async () => ({ 'dist-tags': { latest: '1.1.1' } }) });
   const info = await checkForUpdate({ current: '1.1.1', cachePath, fetchImpl, now: 1 });
@@ -174,7 +174,7 @@ function nonGitRoot() {
   return mkdtempSync(join(tmpdir(), 'tc-root-'));
 }
 
-test('autoUpdate skips a malformed registry version with a log line and installs nothing', async () => {
+test('autoUpdate skips a malformed registry version with a log line and installs nothing', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const root = nonGitRoot();
   const logs = [];
   let installed = 0;
@@ -192,7 +192,7 @@ test('autoUpdate skips a malformed registry version with a log line and installs
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('autoUpdate still installs a well-formed newer version for a global install', async () => {
+test('autoUpdate still installs a well-formed newer version for a global install', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const root = nonGitRoot();
   const installs = [];
   try {
@@ -209,7 +209,7 @@ test('autoUpdate still installs a well-formed newer version for a global install
 
 // `sudo teamclaude server` would otherwise run `npm install -g` as root every
 // day, off a version string fetched from the network.
-test('autoUpdate never runs as root, and says so once', async () => {
+test('autoUpdate never runs as root, and says so once', { skip: 'Octopus is a local fork: checkForUpdate/autoUpdate are disabled' }, async () => {
   const root = nonGitRoot();
   const logs = [];
   let checked = 0;

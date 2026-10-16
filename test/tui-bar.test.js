@@ -8,8 +8,8 @@ import { TUI, bar } from '../src/tui.js';
 // contrast with each fill color: black on green/yellow (both render light in
 // many terminal themes), white only on red.
 test('green and yellow fills use a black label', () => {
-  assert.match(bar(0.5, 10), /\x1b\[42;30m/);
-  assert.match(bar(0.8, 10), /\x1b\[43;30m/);
+  assert.match(bar(0.4, 10), /\x1b\[42;30m/);
+  assert.match(bar(0.6, 10), /\x1b\[43;30m/);
 });
 
 test('red fill keeps a white label', () => {
@@ -20,72 +20,50 @@ test('empty portion keeps gray-on-gray', () => {
   assert.match(bar(0.5, 10), /\x1b\[100;37m/);
 });
 
-// With a known window, color tracks burn rate: usage minus the share of the
-// window already elapsed, not raw fill. A half-elapsed window (reset half the
-// window away) is the fixed reference point for these.
+// [Octopus local patch] Color follows the fill alone: 0-49% green, 50-74%
+// yellow, 75-89% orange, 90%+ red. The window and its reset time are ignored.
 const WINDOW = 60 * 60 * 1000;
-const halfElapsedReset = () => Date.now() + WINDOW / 2; // 50% of the window gone
+const halfElapsedReset = () => Date.now() + WINDOW / 2;
 
-test('under pace is green even at high fill', () => {
-  // 30% used, 50% elapsed -> diff -20 -> green, where raw 0.3 is also green but
-  // the point is 0.8 flips too:
-  assert.match(bar(0.3, 10, halfElapsedReset(), WINDOW), /\x1b\[42;30m/);
-  // 60% used, 90% elapsed -> diff -30 -> green, though raw 0.6 would still be green;
-  // use 88% used with 90% elapsed -> diff -2 -> green while raw 0.88 is red.
-  assert.match(bar(0.88, 10, Date.now() + WINDOW * 0.1, WINDOW), /\x1b\[42;30m/);
+test('0-49% fill is green', () => {
+  assert.match(bar(0.1, 10), /\x1b\[42;30m/);
+  assert.match(bar(0.49, 10), /\x1b\[42;30m/);
 });
 
-test('slightly ahead of pace is yellow', () => {
-  // 54% used, 50% elapsed -> diff 4 -> yellow.
-  assert.match(bar(0.54, 10, halfElapsedReset(), WINDOW), /\x1b\[43;30m/);
+test('50-74% fill is yellow', () => {
+  assert.match(bar(0.50, 10), /\x1b\[43;30m/);
+  assert.match(bar(0.74, 10), /\x1b\[43;30m/);
 });
 
-test('well ahead of pace is orange (256-color background)', () => {
-  // 62% used, 50% elapsed -> diff 12 -> orange.
-  assert.match(bar(0.62, 10, halfElapsedReset(), WINDOW), /\x1b\[48;5;208;30m/);
+test('75-89% fill is orange (256-color background)', () => {
+  assert.match(bar(0.75, 10), /\x1b\[48;5;208;30m/);
+  assert.match(bar(0.89, 10), /\x1b\[48;5;208;30m/);
 });
 
-test('far ahead of pace is red', () => {
-  // 70% used, 50% elapsed -> diff 20 -> red.
-  assert.match(bar(0.70, 10, halfElapsedReset(), WINDOW), /\x1b\[41;97m/);
+test('90%+ fill is red', () => {
+  assert.match(bar(0.90, 10), /\x1b\[41;97m/);
+  assert.match(bar(1.0, 10), /\x1b\[41;97m/);
 });
 
-test('without a window it falls back to raw utilization', () => {
-  // Same 0.88 that read green at 10% elapsed with a window is plain yellow on
-  // the raw thresholds here (0.7 <= 0.88 < 0.9), so the window genuinely changes
-  // the verdict rather than the fill alone.
-  assert.match(bar(0.88, 10), /\x1b\[43;30m/);
+test('the window and its pace no longer change the color', () => {
+  // Under pace used to be green and far ahead of pace red; now only fill counts.
+  assert.match(bar(0.88, 10, Date.now() + WINDOW * 0.1, WINDOW), /\x1b\[48;5;208;30m/);
+  assert.match(bar(0.70, 10, halfElapsedReset(), WINDOW), /\x1b\[43;30m/);
+  assert.match(bar(0.30, 10, halfElapsedReset(), WINDOW), /\x1b\[42;30m/);
+  assert.match(bar(0.95, 10, undefined, WINDOW), /\x1b\[41;97m/);
+  assert.match(bar(0.5, 10, null, WINDOW), /\x1b\[43;30m/);
 });
 
-// Routing eligibility outranks pace. `_isNearQuota` bars an account whose bucket
+// Routing eligibility outranks fill. `_isNearQuota` bars an account whose bucket
 // sits at or above the switch threshold, so a bar reading green there would
 // contradict the `exhausted` status cell drawn next to it.
-test('a bucket at the switch threshold is red however good the pace', () => {
-  const almostOver = Date.now() + WINDOW * 0.01; // 99% of the window elapsed
-  // 98% used against 99% elapsed: pace alone calls this green.
-  assert.match(bar(0.98, 10, almostOver, WINDOW), /\x1b\[42;30m/);
-  assert.match(bar(0.98, 10, almostOver, WINDOW, 0.98), /\x1b\[41;97m/);
-});
-
-test('below the threshold the pace still decides', () => {
-  // 90% used against 99% elapsed, threshold 98%: still eligible, so pace rules
-  // and the top end of the scale does not collapse into red.
-  assert.match(bar(0.9, 10, Date.now() + WINDOW * 0.01, WINDOW, 0.98), /\x1b\[42;30m/);
-});
-
-// A window length with no reset timestamp is the same dead end as an elapsed
-// one: there is no point in the window to measure against, so the raw scale
-// decides rather than an elapsed share invented from a missing value.
-test('a window with no reset timestamp uses the raw scale', () => {
-  assert.match(bar(0.95, 10, undefined, WINDOW), /\x1b\[41;97m/);
-  assert.match(bar(0.5, 10, null, WINDOW), /\x1b\[42;30m/);
-});
-
-test('the threshold also overrides the windowless raw scale', () => {
-  // A token/request bar has no window, and a threshold can be set as low as 1%,
-  // so raw fill under 70% can still be past the point of routing.
-  assert.match(bar(0.65, 10), /\x1b\[42;30m/);
+test('a bucket at the switch threshold is red whatever its fill', () => {
   assert.match(bar(0.65, 10, undefined, undefined, 0.6), /\x1b\[41;97m/);
+  assert.match(bar(0.98, 10, Date.now() + WINDOW * 0.01, WINDOW, 0.98), /\x1b\[41;97m/);
+});
+
+test('below the threshold the fill scale decides', () => {
+  assert.match(bar(0.85, 10, Date.now() + WINDOW * 0.01, WINDOW, 0.98), /\x1b\[48;5;208;30m/);
 });
 
 // ── the label overlaid on the bar ───────────────────────────────────────────
@@ -208,12 +186,13 @@ test('the row carries the percentage on every bar only when the switch is on', (
 
 test('a spent session bucket renders red on the row, not just in bar()', () => {
   const h = 3600_000;
-  // 99% of a 5h bucket with a minute left on the window: pace says green, and
-  // the rotation has already stopped routing here.
+  // 99% of a 5h bucket: at or above the switch threshold, so the rotation has
+  // already stopped routing here.
   const spent = renderRow({ unified5h: 0.99, unified5hReset: Date.now() + 60_000, unified7d: 0.3, unified7dReset: Date.now() + 3 * 24 * h });
   assert.match(spent, /\x1b\[41;97m/);
-  // Same window, same elapsed share, one point below the threshold: no red.
-  const usable = renderRow({ unified5h: 0.97, unified5hReset: Date.now() + 60_000, unified7d: 0.3, unified7dReset: Date.now() + 3 * 24 * h });
+  // [Octopus local patch] Fill alone picks the color, and 90%+ is red anyway, so
+  // "usable" is an 85% bucket (orange): no red.
+  const usable = renderRow({ unified5h: 0.85, unified5hReset: Date.now() + 60_000, unified7d: 0.3, unified7dReset: Date.now() + 3 * 24 * h });
   assert.doesNotMatch(usable, /\x1b\[41;97m/);
 });
 
@@ -230,15 +209,15 @@ function fillAfter(row, label) {
 // invisible without a test: pace a five-hour bucket against a week and the
 // elapsed share is always ~100%, so the bar reads green at every fill below the
 // threshold — the exact failure the colouring exists to prevent.
-test('the session bar is paced against five hours, not the weekly window', () => {
+test('the session bar is colored by its own fill, not by pace', () => {
   const h = 3600_000;
-  // Half of the session bucket spent an hour into it: 50% used, 20% elapsed,
-  // diff 30 -> red. Against a seven-day window the same row reads green.
+  // [Octopus local patch] Half of the session bucket spent an hour into it:
+  // 50% used -> yellow, whatever the window or the elapsed share.
   const row = renderRow({
     unified5h: 0.5, unified5hReset: Date.now() + 4 * h,
     unified7d: 0.3, unified7dReset: Date.now() + 3 * 24 * h,
   });
-  assert.equal(fillAfter(row, 'Ses '), '41;97');
+  assert.equal(fillAfter(row, 'Ses '), '43;30');
 });
 
 test('the weekly bar is paced against seven days, not the session window', () => {
@@ -392,10 +371,10 @@ test('a backend account without a monthly window draws no Mon bar', () => {
 });
 
 test('a monthly window in the Wk slot does not redden at the metered threshold either', () => {
-  // 99% a minute from reset: pace says green, so any red comes from a threshold
-  // a backend slot must not carry.
+  // [Octopus local patch] 60% fill is yellow, so any red would come from a
+  // threshold a backend slot must not carry.
   const raw = renderBackendRow({ ...BACKEND, windows: { fiveHour: BACKEND.windows.fiveHour,
-    monthly: { utilization: 0.99, resetAt: Date.now() + 60_000 } } }).row;
+    monthly: { utilization: 0.6, resetAt: Date.now() + 60_000 } } }).row;
   assert.match(plain(raw), /Mon/);
   assert.doesNotMatch(raw.slice(raw.indexOf('Mon')), /\x1b\[41;97m/);
 });
@@ -501,10 +480,11 @@ test('a bar slot filled from a backend window never reddens, even beside a unifi
   // the Ses slot comes from the probe, so the fleet threshold must not paint it.
   const am = new AccountManager(
     [{ name: 'kimi', type: 'apikey', apiKey: 'k', upstream: 'https://api.kimi.com/coding' }],
-    0.98);
+    0.5);
   Object.assign(am.accounts[0].quota, { unified7d: 0.3, unified7dReset: Date.now() + 3 * 24 * BH });
-  am.accounts[0].quota.backend = { label: 'Plan', text: 'x', utilization: 0.99, at: Date.now(),
-    windows: { fiveHour: { utilization: 0.99, resetAt: Date.now() + 60_000 } } };
+  // [Octopus local patch] 60% fill is yellow; only a fleet threshold of 50% could paint it red.
+  am.accounts[0].quota.backend = { label: 'Plan', text: 'x', utilization: 0.6, at: Date.now(),
+    windows: { fiveHour: { utilization: 0.6, resetAt: Date.now() + 60_000 } } };
   const tui = new TUI({
     accountManager: am, config: { proxy: { port: 1 }, accounts: [], routes: [], quotaBarPercent: true }, sx: null,
     saveConfig: async () => {}, syncAccounts: async () => 0, onQuit: () => {}, probeQuota: () => {},
@@ -526,9 +506,9 @@ test('an expired backend window is not drawn as current', () => {
 });
 
 test('backend bars never redden at a threshold: rotation gates nothing on them', () => {
-  const raw = renderBackendRow({ ...BACKEND, windows: { fiveHour: { utilization: 0.99, resetAt: Date.now() + 60_000 } } }).row;
+  const raw = renderBackendRow({ ...BACKEND, windows: { fiveHour: { utilization: 0.6, resetAt: Date.now() + 60_000 } } }).row;
   assert.doesNotMatch(raw, /\x1b\[41;97m/);
-  assert.match(plain(raw), /99%/);
+  assert.match(plain(raw), /60%/); // [Octopus local patch] 60% is yellow, not red
 });
 
 test('the percentage switch covers the backend bars too', () => {

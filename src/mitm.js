@@ -278,7 +278,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
       try {
         const target = upgradeUpstreamFor(req.headers.host, config, upstream);
         if (!target) {
-          log(`[TeamClaude] MITM: refusing a WebSocket Upgrade for host ${JSON.stringify(safeLine(req.headers.host, 64))}, which this proxy does not intercept`);
+          log(`[Octopus] MITM: refusing a WebSocket Upgrade for host ${JSON.stringify(safeLine(req.headers.host, 64))}, which this proxy does not intercept`);
           try { socket.write('HTTP/1.1 421 Misdirected Request\r\nConnection: close\r\n\r\n'); } catch { /* client already gone */ }
           socket.destroy();
           return;
@@ -292,7 +292,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
         // Control channel, which is the client's own and still relayed.
         const wsProvider = providerForPath(req.url);
         if (wsProvider !== DEFAULT_PROVIDER) {
-          log(`[TeamClaude] MITM: refusing a ${wsProvider} WebSocket for ${safeLine(req.url, 96)} — it would run on the client's own login, not the pool; the client falls back to HTTPS`);
+          log(`[Octopus] MITM: refusing a ${wsProvider} WebSocket for ${safeLine(req.url, 96)} — it would run on the client's own login, not the pool; the client falls back to HTTPS`);
           try { socket.write('HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n'); } catch { /* client already gone */ }
           socket.destroy();
           return;
@@ -301,7 +301,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
         // so the channel is attributed the way the requests in the tunnel are.
         relayUpgrade(req, socket, head, target, sx, { client, clientUsage, log, stripOverage: shouldStripOverageHeaders(config) });
       } catch (err) {
-        log(`[TeamClaude] MITM: WebSocket upgrade handler failed for ${safeLine(req?.url)}: ${err?.message || err}`);
+        log(`[Octopus] MITM: WebSocket upgrade handler failed for ${safeLine(req?.url)}: ${err?.message || err}`);
         try { socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n'); } catch { /* client already gone */ }
         socket.destroy();
       }
@@ -312,13 +312,13 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
     if (!http1Only) {
       srv.on('stream', (stream, headers) => {
         if (headers[':method'] === 'CONNECT' || headers[':protocol']) {
-          log('[TeamClaude] A client tried to open a WebSocket over HTTP/2, which this proxy cannot relay. '
+          log('[Octopus] A client tried to open a WebSocket over HTTP/2, which this proxy cannot relay. '
             + 'Remote Control will appear connected and silently deliver nothing. '
             + 'Set "mitm": { "http1Only": true } in the config to force HTTP/1.1 (see #164).');
         }
       });
     }
-    srv.on('sessionError', (e) => log(`[TeamClaude] MITM session error: ${e.message}`));
+    srv.on('sessionError', (e) => log(`[Octopus] MITM session error: ${e.message}`));
     srv.on('clientError', (e, sock) => { try { sock.destroy(); } catch { /* already gone */ } });
     return srv;
     })().catch((err) => {
@@ -368,7 +368,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
       // in the lookup below so a DNS alias for 127.0.0.1 does not get past.
       const refused = forwardRefusal(host, null, clientSocket);
       if (refused) {
-        log(`[TeamClaude] CONNECT ${host}:${port} refused: ${refused}`);
+        log(`[Octopus] CONNECT ${host}:${port} refused: ${refused}`);
         refuseRaw(clientSocket, '403 Forbidden');
         return;
       }
@@ -400,7 +400,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
         const refusedAfter = forwardRefusal(host, up.remoteAddress, clientSocket)
           || (up.remotePort === ownPort && up.localAddress === up.remoteAddress ? 'that is this proxy\'s own listener' : null);
         if (refusedAfter) {
-          log(`[TeamClaude] CONNECT ${host}:${port} refused: ${refusedAfter}`);
+          log(`[Octopus] CONNECT ${host}:${port} refused: ${refusedAfter}`);
           teardown('403 Forbidden');
           return;
         }
@@ -411,11 +411,11 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
       });
       up.on('error', (/** @type {CodedError} */ err) => {
         if (err.code === FORBIDDEN_FORWARD) {
-          log(`[TeamClaude] CONNECT ${host}:${port} refused: ${err.message}`);
+          log(`[Octopus] CONNECT ${host}:${port} refused: ${err.message}`);
           teardown('403 Forbidden');
           return;
         }
-        if (!established) log(`[TeamClaude] tunnel ${host}:${port} failed: ${describeConnectError(err)}`);
+        if (!established) log(`[Octopus] tunnel ${host}:${port} failed: ${describeConnectError(err)}`);
         teardown('502 Bad Gateway');
       });
       // A FIN before the tunnel is live (no preceding 'error') is still a failed
@@ -431,7 +431,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
       ensureLeaf().then(({ key, cert }) => {
         reply200Raw(clientSocket);
         serveTest(termClaude(clientSocket, head, key, cert, ['http/1.1']));
-      }).catch((err) => { log(`[TeamClaude] MITM ${host}: ${err.message}`); reply502Raw(clientSocket); clientSocket.destroy(); });
+      }).catch((err) => { log(`[Octopus] MITM ${host}: ${err.message}`); reply502Raw(clientSocket); clientSocket.destroy(); });
       return;
     }
 
@@ -447,7 +447,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
     // down unrelated traffic over a typo meant for Anthropic.
     const { pin, error } = resolveConnectPin(req, accountManager, config.proxy);
     if (error) {
-      log(`[TeamClaude] CONNECT ${host}: ${error}`);
+      log(`[Octopus] CONNECT ${host}: ${error}`);
       try {
         clientSocket.write(`HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="teamclaude"\r\nConnection: close\r\n\r\n`);
       } catch { /* client already gone */ }
@@ -459,7 +459,7 @@ export function createConnectHandler({ config, accountManager, ensureLeaf, logDi
       reply200Raw(clientSocket);
       if (head && head.length) clientSocket.unshift(head);
       srv.emit('connection', clientSocket);
-    }).catch((err) => { log(`[TeamClaude] MITM ${host}: ${err.message}`); reply502Raw(clientSocket); clientSocket.destroy(); });
+    }).catch((err) => { log(`[Octopus] MITM ${host}: ${err.message}`); reply502Raw(clientSocket); clientSocket.destroy(); });
   };
 }
 

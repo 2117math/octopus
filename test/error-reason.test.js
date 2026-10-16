@@ -28,7 +28,7 @@ test('a rejected refresh token reports its code, status, time and remedy', async
   assert.equal(row.errorReason.code, 'refresh_rejected');
   assert.match(row.errorReason.detail, /\(400\)/);
   assert.ok(row.errorReason.since >= before);
-  assert.equal(row.errorReason.remedy, 'teamclaude login');
+  assert.equal(row.errorReason.remedy, 'octopus login');
   assert.doesNotMatch(JSON.stringify(row.errorReason), /invalid_grant|secret-value/, 'no upstream body and no token in status');
 });
 
@@ -43,7 +43,7 @@ test('a 401 on a token with nothing to refresh reports credential_rejected', () 
 test('a Codex account is told to sign in with --codex', () => {
   const am = new AccountManager([expiring({ provider: 'codex', accountId: 'acct', refreshToken: undefined, expiresAt: Date.now() + 3600_000 })], 0.98);
   am.markCredentialRejected(0, 'upstream rejected its token (401) and it has no refresh token');
-  assert.equal(am.getStatus().accounts[0].errorReason.remedy, 'teamclaude login --codex');
+  assert.equal(am.getStatus().accounts[0].errorReason.remedy, 'octopus login --codex');
 });
 
 test('the reason leaves status once the account is back', async () => {
@@ -65,6 +65,6 @@ test('status prints the reason and the command instead of "see logs"', async () 
   const am = new AccountManager([expiring()], 0.98, { refreshFn: async () => { throw rejected(400); } });
   await am.ensureTokenFresh(0);
   const line = unavailableLine(am.getStatus().accounts[0], paint);
-  assert.match(line ?? '', /needs a re-login: upstream rejected its refresh token \(400\) — run: teamclaude login/);
+  assert.match(line ?? '', /needs a re-login: upstream rejected its refresh token \(400\) — run: octopus login/);
   assert.doesNotMatch(line ?? '', /see logs/);
 });

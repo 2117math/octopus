@@ -171,7 +171,7 @@ test('short spans read in minutes', () => {
     'week reaches 98% in ~20m, resets in 2h');
 });
 
-test('teamclaude status prints the Forecast line only when there is a warning', () => {
+test('octopus status prints the Forecast line only when there is a warning', () => {
   const status = (forecast) => ({
     accounts: [{ name: 'a', type: 'oauth', quota: { unified7d: 0.5, forecast }, usage: {} }],
   });

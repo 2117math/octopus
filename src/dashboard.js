@@ -749,7 +749,7 @@ const PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TeamClaude</title>
+<title>Octopus</title>
 <style>
   /* Dark is the default, and stays the default for a viewer whose system says
      nothing. The light palette is applied two ways: by the media query when no
@@ -868,13 +868,13 @@ const PAGE = `<!doctype html>
 <body>
 <main>
   <div id="keybox">
-    <h1>TeamClaude</h1>
+    <h1>Octopus</h1>
     <p class="sub">Enter your proxy key to view status.</p>
     <input id="key" type="password" placeholder="tc-..." autocomplete="off">
     <br><button id="go">Connect</button>
   </div>
   <div id="app" style="display:none">
-    <h1>TeamClaude</h1>
+    <h1>Octopus</h1>
     <p class="sub" id="summary"></p>
     <div class="actions">
       <button id="reload" type="button">Reload config</button>

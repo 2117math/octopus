@@ -814,7 +814,7 @@ test('GET /teamclaude/dashboard serves HTML without a key; other methods are a l
     assert.equal(page.status, 200);
     assert.match(page.headers.get('content-type'), /text\/html/);
     const html = await page.text();
-    assert.match(html, /TeamClaude/);
+    assert.match(html, /Octopus/);
 
     // The page keeps the proxy key in localStorage, so it ships with a policy
     // that lets nothing load from anywhere and admits only its own script —
@@ -843,7 +843,7 @@ test('GET /teamclaude/dashboard serves HTML without a key; other methods are a l
     // proxy's own prefix is now answered here (#420).
     const post = await fetch(`http://127.0.0.1:${port}/teamclaude/dashboard`, { method: 'POST' });
     assert.equal(post.status, 404);
-    assert.match((await post.json()).error, /unknown teamclaude control route/);
+    assert.match((await post.json()).error, /unknown octopus control route/);
     assert.equal(upstreamHits, 0);
   } finally {
     proxy.close();

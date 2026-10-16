@@ -509,31 +509,22 @@ const BAR_ORANGE = { bg: '48;5;208', fg: '30' };
 const BAR_RED = { bg: '41', fg: '97' };
 
 /**
- * Pick a bar color. A bucket at or above `threshold` is red whatever its pace:
+ * Pick a bar color. A bucket at or above `threshold` is red whatever its fill:
  * that is the point where the rotation stops routing to it — eligibility()
  * calls the account out as "at or above the switch threshold", and the row's
  * `⊘` tag comes off the same comparison in blockedFamilies — so a green bar
- * would contradict the rest of the row. Below it, and with a window still
- * running, color by burn rate: how far usage is ahead of the share of the window
- * already elapsed, so a bucket that is 80% spent with the week nearly over
- * reads calm, not alarming. Fall back to raw utilization when there is no pace
- * to measure — no window at all (API-key token/request bars, whose reset
- * cadence is unknown), or a window whose reset has passed, which says nothing
- * about the fill still being reported against it.
+ * would contradict the rest of the row. Below it the color follows the fill
+ * alone: under 50% green, 50–74% yellow, 75–89% orange, 90% and up red.
+ * [Octopus local patch] `resetTs` and `windowMs` are accepted for the callers'
+ * sake but ignored: the upstream burn-rate coloring is gone.
  */
 function barColor(ratio, resetTs, windowMs, threshold) {
   if (threshold != null && ratio >= threshold) return BAR_RED;
-  const remaining = resetTs ? resetTs - Date.now() : 0;
-  if (windowMs && remaining > 0) {
-    const elapsed = Math.max(0, windowMs - remaining);
-    const timePct = (elapsed / windowMs) * 100;
-    const diff = ratio * 100 - timePct;
-    if (diff <= 0) return BAR_GREEN;
-    if (diff <= 5) return BAR_YELLOW;
-    if (diff <= 15) return BAR_ORANGE;
-    return BAR_RED;
-  }
-  return ratio < 0.7 ? BAR_GREEN : ratio < 0.9 ? BAR_YELLOW : BAR_RED;
+  // [local patch] Color by fill alone; resetTs/windowMs (pace) are ignored.
+  if (ratio < 0.5) return BAR_GREEN;
+  if (ratio < 0.75) return BAR_YELLOW;
+  if (ratio < 0.9) return BAR_ORANGE;
+  return BAR_RED;
 }
 
 /**
@@ -837,7 +828,7 @@ export class TUI {
     this._activityStream.on('error', err => {
       // Swallow write errors — can't log them to the TUI without recursion
       this._activityStream = null;
-      process.stderr.write(`[TeamClaude] activity log error: ${err.message}\n`);
+      process.stderr.write(`[Octopus] activity log error: ${err.message}\n`);
     });
     return this._activityStream;
   }
@@ -919,7 +910,7 @@ export class TUI {
     if (this._stdoutDead) return;
     this._stdoutDead = true;
     const report = this._origErr || console.error;
-    report(`[TeamClaude] terminal lost (${stream}: ${err?.code || err?.message || err}); ` +
+    report(`[Octopus] terminal lost (${stream}: ${err?.code || err?.message || err}); ` +
       (this.remote ? 'closing the attach client' : 'the proxy keeps running without a display'));
     // A failure that arrives after stop() — a write still queued when the
     // operator quit — is only recorded: the exit is already under way.
@@ -1054,7 +1045,7 @@ export class TUI {
     // The screen copy keeps the colour callers painted on, and only that: a
     // request's model string is repainted from this list every frame for as
     // long as the entry lives, so an escape stored here would fire 200 times.
-    msg = scrubLine(msg).replace(/^\[TeamClaude\]\s*/, '');
+    msg = scrubLine(msg).replace(/^\[Octopus\]\s*/, '');
     const t = timestamp();
     this.log.unshift({ t, msg });
     if (this.log.length > 200) this.log.length = 200;
@@ -2494,7 +2485,7 @@ export class TUI {
     let links = new Map();
 
     // ── Header
-    const left = bold(' TeamClaude');
+    const left = bold(' Octopus');
     const port = this.config.proxy?.port || 3456;
     const sess = this.am.sessionStats();
     const sessStr = (sess.active || sess.known)
@@ -3343,7 +3334,7 @@ export class TUI {
     if (byId('sessionTitles')) lines.push(row(byId('sessionTitles')));
     lines.push('');
     // ── Launch
-    lines.push(bold('  Launch') + dim('  — how `teamclaude run` and `env` reach the proxy when no flag says'));
+    lines.push(bold('  Launch') + dim('  — how `octopus run` and `env` reach the proxy when no flag says'));
     lines.push(row(byId('clientMode')));
     lines.push('');
     // ── Routing
