@@ -69,6 +69,13 @@ keeps a short tag (`count` for count_tokens, else the last path segment), and a 
 as a red `✗ 429` before the duration. A `sessionTitles.width` left at 18 widens to 32 in compact rows; any
 other width stands. The default, `"full"`, is the row above.
 
+Like requests share one row. When a request finishes with a 2xx and the newest row is the same session,
+account and model (and, in the full format, the same method and path) written less than a minute before,
+that row is rewritten instead of a new one added: the latest time and duration, with `×3` at the end for the
+three requests it now stands for. A status other than 2xx always gets a row of its own and ends the run. The
+activity log file (`--activity-log`) still gets one line per request. Turn folding off with **g** → **Fold
+activity** (`activityFold: false` in the config).
+
 ```
  ⠋ 17:42:57  로그인 버그 고치기 그리고 OAuth   (claude-fable-5)  → bluejin  (0.0s...)
    17:42:57  로그인 버그 고치기 그리고 OAuth   count (claude-opus-5)  → mimath0626  0.3s

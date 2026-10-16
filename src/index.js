@@ -645,6 +645,8 @@ async function serverCommand() {
     config.quotaBarPercent = diskConfig.quotaBarPercent === true;
     // The activity row format, read per row the same way; 'full' unless 'compact'.
     config.activityFormat = diskConfig.activityFormat === 'compact' ? 'compact' : 'full';
+    // Folding like requests into one activity row; on unless set to false.
+    config.activityFold = diskConfig.activityFold !== false;
     // The same, for the Sessions panel; on unless set to false.
     config.sessionRows = diskConfig.sessionRows !== false;
     // The Host line, the same way; on unless set to false.
@@ -751,6 +753,7 @@ async function serverCommand() {
         if (config.eventLogging != null) diskConfig.eventLogging = config.eventLogging;
         if (config.quotaBarPercent != null) diskConfig.quotaBarPercent = config.quotaBarPercent;
         if (config.activityFormat != null) diskConfig.activityFormat = config.activityFormat;
+        if (config.activityFold != null) diskConfig.activityFold = config.activityFold;
         if (config.sessionRows != null) diskConfig.sessionRows = config.sessionRows;
         if (config.hostLine != null) diskConfig.hostLine = config.hostLine;
         if (config.rebalanceSessions != null) diskConfig.rebalanceSessions = config.rebalanceSessions;

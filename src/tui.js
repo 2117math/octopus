@@ -103,6 +103,8 @@ const SESSION_ROW_WINDOW_MS = 10 * 60 * 1000;
 // The Sessions panel under the account list: at most this many session lines
 // (the rest are counted), and the widest an account or model column may get.
 const SESSIONS_PANEL_MAX = 8;
+// How far apart two like requests may finish and still share an activity row.
+const ACTIVITY_FOLD_MS = 60_000;
 const SESSIONS_PANEL_ACCT_W = 32;
 const SESSIONS_PANEL_MODEL_W = 12;
 const strike = s => `${ESC}9m${s}${RESET}`;
@@ -1198,24 +1200,53 @@ export class TUI {
     const model = modelParen(modelLabel(info.model, info.effort), info.effort, false); // shown when the request named a model
     const sid = info.sessionId || r?.sessionId || null;
     const pin = (info.pinned || r?.pinned) ? dim(' [pin]') : '';
-    if (this._compactActivity()) {
+    const compact = this._compactActivity();
+    // A 2xx folds into the row above when that row is the same session,
+    // account and model (and, in the full format, method and path); anything
+    // else is a row of its own. See _addLog.
+    const ok = typeof info.status === 'number' && info.status >= 200 && info.status < 300;
+    const fold = ok
+      ? JSON.stringify([compact ? 'c' : 'f', sid || '', acct, modelLabel(info.model, info.effort) || '', compact ? '' : `${info.method} ${info.path}`])
+      : null;
+    if (compact) {
       const tag = compactPathTag(info.path);
       const what = [tag && dim(tag), model && unlead(model)].filter(Boolean).join(' ');
-      this._addLog([this._sessionTag(sid), what, `→ ${acct}${pin}`, `${compactStatus(info.status)}${dur}s`].filter(Boolean).join('  '));
+      this._addLog([this._sessionTag(sid), what, `→ ${acct}${pin}`, `${compactStatus(info.status)}${dur}s`].filter(Boolean).join('  '), { fold });
     } else {
-      this._addLog(`${this._sessionTag(sid)} ${info.method} ${info.path}${model} → ${acct}${pin} (${info.status}, ${dur}s)`);
+      this._addLog(`${this._sessionTag(sid)} ${info.method} ${info.path}${model} → ${acct}${pin} (${info.status}, ${dur}s)`, { fold });
     }
     if (this.active.size === 0) this._retick();   // animating → idle
   }
 
-  _addLog(msg) {
+  /**
+   * One line in the activity pane, and in the activity file when one is open.
+   *
+   * `fold` is a completed request's fold key (see onRequestEnd). When the
+   * newest row on screen carries the same key and was written within
+   * ACTIVITY_FOLD_MS, that row is rewritten instead of a new one added: the
+   * latest text and time, with `×N` for the requests it now stands for.
+   * activityFold: false turns this off. The file keeps one line per request
+   * either way.
+   * @param {string} msg
+   * @param {{ fold?: string|null }} [opts]
+   */
+  _addLog(msg, { fold = null } = {}) {
     // The screen copy keeps the colour callers painted on, and only that: a
     // request's model string is repainted from this list every frame for as
     // long as the entry lives, so an escape stored here would fire 200 times.
     msg = scrubLine(msg).replace(/^\[Octopus\]\s*/, '');
     const t = timestamp();
-    this.log.unshift({ t, msg });
-    if (this.log.length > 200) this.log.length = 200;
+    const now = Date.now();
+    const head = this.log[0];
+    if (fold && this.config?.activityFold !== false && head?.fold?.key === fold && now - head.fold.at <= ACTIVITY_FOLD_MS) {
+      head.fold.count++;
+      head.fold.at = now;
+      head.t = t;
+      head.msg = `${msg} ${dim(`×${head.fold.count}`)}`;
+    } else {
+      this.log.unshift(fold ? { t, msg, fold: { key: fold, count: 1, at: now } } : { t, msg });
+      if (this.log.length > 200) this.log.length = 200;
+    }
     // sanitizeText, not `strip`: the latter removes SGR colour only, so an
     // erase or cursor-move sequence reached the file, as did a newline.
     if (this._activityStream) this._activityStream.write(`${t}  ${sanitizeText(msg)}\n`);
@@ -1536,6 +1567,16 @@ export class TUI {
       left: () => this._toggleActivityFormat(),
       right: () => this._toggleActivityFormat(),
       enter: () => this._toggleActivityFormat(),
+    });
+
+    fields.push({
+      id: 'activityFold',
+      label: 'Fold activity',
+      hint: '←→ toggle',
+      value: () => (this.config.activityFold !== false ? green('on') : gray('off')),
+      left: () => this._toggleActivityFold(),
+      right: () => this._toggleActivityFold(),
+      enter: () => this._toggleActivityFold(),
     });
 
     fields.push({
@@ -2374,6 +2415,16 @@ export class TUI {
     this.config.activityFormat = next;
     if (!await this._saveSetting('activity format', () => { this.config.activityFormat = prev; })) return;
     this._addLog(`Activity format: ${next}`);
+    if (this.running) this.render();
+  }
+
+  async _toggleActivityFold() {
+    // On unless set to false; rows already folded stay as they are.
+    const prev = this.config.activityFold;
+    const on = prev === false;
+    this.config.activityFold = on;
+    if (!await this._saveSetting('activity folding', () => { this.config.activityFold = prev; })) return;
+    this._addLog(`Fold activity: ${on ? 'on' : 'off'}`);
     if (this.running) this.render();
   }
 
@@ -3988,6 +4039,7 @@ export class TUI {
     lines.push(bold('  Activity log') + dim('  — what to do with Claude Code\'s telemetry'));
     lines.push(row(byId('eventlog')));
     lines.push(row(byId('activityFormat')));
+    lines.push(row(byId('activityFold')));
     if (byId('sessionTitles')) lines.push(row(byId('sessionTitles')));
     lines.push('');
     // ── Launch
