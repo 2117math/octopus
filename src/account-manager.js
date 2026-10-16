@@ -54,6 +54,40 @@ export function distributionMode(setting) {
   return 'even';
 }
 
+/**
+ * Normalize the `rebalanceSessions` setting: `{ enabled, idleSeconds, gap }`.
+ *
+ * Idle rebalance moves a pinned session that comes back after a pause onto the
+ * account a new session would get, when its own account is at least `gap`
+ * (a 0-1 fraction of weekly utilization) more spent. Off unless `enabled` is
+ * exactly true. `idleSeconds` is floored at a minute so a session in the middle
+ * of its work is never moved off a prompt cache that is still warm; `gap` must
+ * be above zero, or two equally spent accounts would trade a session back and
+ * forth. A value out of range falls back to its default.
+ */
+export const REBALANCE_DEFAULTS = Object.freeze({ enabled: false, idleSeconds: 300, gap: 0.10 });
+export const MIN_REBALANCE_IDLE_SECONDS = 60;
+
+/** An idle stretch for the rebalance log line: 45s, 7m, 2h. @param {number} ms */
+function idleText(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h`;
+}
+
+/** @param {unknown} setting @returns {{ enabled: boolean, idleSeconds: number, gap: number }} */
+export function rebalanceSetting(setting) {
+  const s = /** @type {Record<string, unknown>} */ (setting && typeof setting === 'object' ? setting : {});
+  const idle = typeof s.idleSeconds === 'number' && Number.isFinite(s.idleSeconds) && s.idleSeconds >= 0
+    ? Math.max(MIN_REBALANCE_IDLE_SECONDS, s.idleSeconds)
+    : REBALANCE_DEFAULTS.idleSeconds;
+  const gap = typeof s.gap === 'number' && Number.isFinite(s.gap) && s.gap > 0 && s.gap <= 1
+    ? s.gap
+    : REBALANCE_DEFAULTS.gap;
+  return { enabled: s.enabled === true, idleSeconds: idle, gap };
+}
+
 // How long a status read reuses the last adaptive diagnostics. adaptiveStats
 // is a full selection pass over the fleet, and the TUI polls status once a
 // second; the picture cannot change faster than the poll can show it.
@@ -528,8 +562,9 @@ export class AccountManager {
    * @param {Object} [opts.expiryRouting]
    * @param {string} [opts.advisorEligibility]  'strict' (default) or 'prefer'
    * @param {{ host: string, port: number }|null} [opts.listener]  this server's own address, so an accounts[].routing that points back at it is refused (see accountRouting)
+   * @param {Object} [opts.rebalanceSessions]  idle rebalance, see rebalanceSetting (off by default)
    */
-  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null } = {}) {
+  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null, rebalanceSessions } = {}) {
     // How long a just-minted token is trusted against a forced refresh.
     this._forcedRefreshFloorMs = forcedRefreshFloorMs;
     // Injectable for tests (mirrors Prober's probeFn); defaults to the real
@@ -553,6 +588,13 @@ export class AccountManager {
     // header and the remote dashboard all ask only that question.
     this.distributionMode = distributionMode(distributeSessions);
     this.distributeSessions = this.distributionMode !== 'off';
+    // Idle rebalance of pinned sessions (see rebalanceSetting); read per
+    // selection, so setRebalance on a config reload is the whole application.
+    this.setRebalance(rebalanceSessions);
+    // Optional session-title lookup for the rebalance log line; index.js points
+    // it at the SessionTitles store. Null names a session by its id.
+    /** @type {((id: string) => string|null)|null} */
+    this.sessionTitle = null;
     // Adaptive burn rate and tolerated concurrency are inferred from live
     // traffic. Plan size is authoritative OAuth profile metadata, not a learned
     // estimate. Learners are constructed unconditionally so enabling adaptive
@@ -1739,11 +1781,55 @@ export class AccountManager {
       // still wins over a session's stickiness.
       const betterExists = this.accounts.some(a =>
         this._isAvailable(a, model, advisorModel) && !exclude?.has(a.index) && (a.priority || 0) < (pinned.priority || 0));
-      if (!betterExists) return pinned;
+      if (!betterExists) return this._rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) || pinned;
     }
     // No pin was usable, so this is a placement. Placing is aiming: it takes no
     // reading, and the next request to find the pin here takes it.
     return this._pickLeastLoaded(exclude, model, advisorModel);
+  }
+
+  /**
+   * Idle rebalance (opt-in, `rebalanceSessions`): the pin exists to keep a
+   * session on the prompt cache it built, and a session that comes back after
+   * `idleSeconds` without a request has lost that cache anyway. So if its
+   * account is at least `gap` more spent this week than the account a new
+   * session would be placed on now, the session moves there instead of
+   * draining its account further, exactly as the operator's `move` would.
+   *
+   * Never for a session another of whose requests is still in flight, nor for
+   * one its client pins (TC_ACCT outranks every session pin). At most once per
+   * request: the move's destination is recorded as served by recordSession,
+   * which refreshes the pin, so a retry of this request finds the session no
+   * longer idle. The gap is applied as >= with a hair of tolerance for float
+   * error, and must be above zero (rebalanceSetting), so two equally spent
+   * accounts never trade a session back and forth.
+   *
+   * @param {string} sessionId the conversation key the request is routed by
+   * @param {Record<string, any>} pinned the account the session's pin names
+   * @param {Set<number>|null} exclude
+   * @param {string|null} model
+   * @param {string|null} advisorModel
+   * @returns {Record<string, any>|null} the account the session moved to, or null to keep the pin
+   */
+  _rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) {
+    const rb = this.rebalance;
+    if (!rb?.enabled || !this.distributeSessions) return null;
+    const idle = this.sessionTracker.idleFor(sessionId);
+    if (!idle || idle.clientPinned || idle.idleMs < rb.idleSeconds * 1000) return null;
+    const target = this._pickLeastLoadedEven(exclude, model, advisorModel);
+    if (!target || target.index === pinned.index || providerOf(target) !== providerOf(pinned)) return null;
+    const from = this._governingWeekly(pinned, model);
+    const to = this._governingWeekly(target, model);
+    if (typeof from !== 'number' || typeof to !== 'number' || !Number.isFinite(from) || !Number.isFinite(to)) return null;
+    if (from - to + 1e-9 < rb.gap) return null;
+    if (!this.sessionTracker.movePins(idle.id, target.index)) return null;
+    let title = null;
+    try { title = this.sessionTitle?.(idle.id) ?? null; } catch { title = null; }
+    const label = (typeof title === 'string' && safeLine(title, 60)) || safeLine(idle.id, 128).slice(0, 6);
+    const pct = (/** @type {number} */ v) => `${Math.round(v * 100)}%`;
+    console.log(`[Octopus] Rebalanced session "${label}" ${safeLine(pinned.name, 64)} → ${safeLine(target.name, 64)}`
+      + ` (idle ${idleText(idle.idleMs)}, ${pct(from)} → ${pct(to)})`);
+    return target;
   }
 
   /** Where a new session goes, per the configured distribution mode. Adaptive
@@ -2785,6 +2871,13 @@ export class AccountManager {
       this._drainingSessions = null;
     }
     this.distributeSessions = false;
+  }
+
+  /** Apply the `rebalanceSessions` setting; safe on every config reload. A
+   *  session already moved stays where it went; only the next decision changes.
+   *  @param {unknown} setting */
+  setRebalance(setting) {
+    this.rebalance = rebalanceSetting(setting);
   }
 
   /** Is this session one of the ones still being drained onto its old account? */

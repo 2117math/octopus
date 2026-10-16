@@ -711,6 +711,44 @@ export class SessionTracker {
     return from;
   }
 
+  /**
+   * How long the client session that the conversation `key` belongs to has
+   * been idle, for the idle rebalance (AccountManager._rebalanceIdle): the
+   * time since any of its conversations last finished a request or was routed.
+   *
+   * Read off the pins rather than `lastSeen`, because `beginRequest` has
+   * already stamped `lastSeen` for the very request being routed now; a pin's
+   * `at` moves only when a request is routed (touch) or ends (endRequest). The
+   * other conversations' `lastSeen` counts as well. Null when the conversation
+   * is unknown, when the session holds no pin, or when another of its requests
+   * is still in flight (that one is not idle, whatever its pin says). The one
+   * hold on `key`'s own record allowed for is this request's own.
+   *
+   * @param {string|null} key the conversation key the request is routed by
+   * @param {number} [now]
+   * @returns {{ id: string, idleMs: number, clientPinned: boolean }|null}
+   *   `id` is the client session, the unit movePins acts on
+   */
+  idleFor(key, now = this._now()) {
+    const own = this._live(key, now);
+    if (!own) return null;
+    const id = own.sessionId || keyOf(key);
+    let last = -Infinity;
+    let pinned = false;
+    let clientPinned = false;
+    for (const [, s] of this._recordsOf(id, now)) {
+      if (s.inFlight > (s === own ? 1 : 0)) return null;
+      if (s.clientPinned === true) clientPinned = true;
+      if (s !== own && s.lastSeen > last) last = s.lastSeen;
+      for (const pin of s.pins.values()) {
+        pinned = true;
+        if (pin.at > last) last = pin.at;
+      }
+    }
+    if (!pinned) return null;
+    return { id, idleMs: Math.max(0, now - last), clientPinned };
+  }
+
   // The live records of one client session, dropping expired ones on the way
   // past. Walks rather than indexing, like recordOutcomeForSession.
   _recordsOf(sessionId, now) {

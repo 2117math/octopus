@@ -78,7 +78,7 @@ curl -X POST http://localhost:3456/teamclaude/threshold \
 
 It is a setting, not a nudge: the number is written to the config file (under its lock, so an edit the CLI or TUI made meanwhile survives) and the server reloads to apply it. The answer carries the stored ratio and, when one number replaced a per-bucket table, `dropped` names the buckets that went. Per-account `accounts[].switchThreshold` overrides are untouched. A request authenticated with a `proxy.clientKeys` entry is refused with 403 — a client key is a tenant of the proxy, not its operator; the shared `proxy.apiKey` and key-exempt loopback callers are allowed.
 
-You usually don't need to call it directly. `login`, `import`, `enable`, `disable`, `priority`, `route`, `threshold`, `distribute`, `probe` and `warmup` notify a running server themselves.
+You usually don't need to call it directly. `login`, `import`, `enable`, `disable`, `priority`, `route`, `threshold`, `distribute`, `rebalance`, `probe` and `warmup` notify a running server themselves.
 
 Control-plane **writes** (`reload`, `switch`, `threshold`, `priority`, `disable`) are refused when the request carries a browser `Origin` or a cross-site `Sec-Fetch-Site`. Loopback is exempt from the proxy API key so the CLI needs no configuration, but that exemption also covers any web page you happen to visit: a page can POST to `127.0.0.1` cross-origin without a preflight, and while it cannot read the reply, the write would still land. `curl` and the CLI send neither header and are unaffected. Reads (`status`) are not restricted — the same-origin policy already stops a page from seeing the response.
 
@@ -125,6 +125,8 @@ octopus move "login bug" me@example.com   # by part of its title or the start of
 ```
 
 `octopus move` refuses a match that names more than one session and lists the candidates. Both commands use the control plane. `GET /teamclaude/status` carries the list as `sessions.list`: at most 100 rows, newest first, each with `id`, `title`, `account`, `accountName`, `lastSeen` (ms ago), `active`, `model` and `clientPinned`. `POST /teamclaude/session-move` takes `{"session": "<id or its start>", "account": "<name, email or index>"}` and answers `{"ok": true, "session": ..., "from": ..., "to": ...}`; an ambiguous session is a `400` with the candidates, an unknown session or account a `404`. A request with a `proxy.clientKeys` key gets no list and is refused the move with `403`, since a session title names someone's work. `octopus attach` reads the same list and moves with **m** as well.
+
+The proxy can make that move itself. With `rebalanceSessions.enabled` on (`octopus rebalance on`, or **g** → **Idle rebalance**), a pinned session that comes back after `idleSeconds` (default 300) without a request has lost its prompt cache anyway. If its account's weekly use is at least `gap` (default `0.10`) above the account a new session would get, the session moves there, every pin of it, and the activity log says `Rebalanced session "<title>" <from> → <to> (idle 7m, 48% → 31%)`. It needs `distributeSessions` on, and leaves a session alone while another of its requests is in flight or while its client pins an account with `TC_ACCT`. `octopus rebalance 600` sets the idle time (at least 60) and switches it on; `octopus rebalance off` switches it off. Off by default.
 
 ### TUI keyboard shortcuts
 
@@ -228,6 +230,7 @@ octopus rename <name> <new> # Rename an account (and the routes that list it)
 octopus route list        # Manage per-model routes (add/rm)
 octopus threshold 90      # Utilization at which rotation leaves an account
 octopus distribute on     # Spread new sessions across equal-priority accounts
+octopus rebalance on      # Move a session back from a break to a less-spent account
 octopus probe 300         # Enable background quota refresh (off by default)
 octopus warmup 600        # Enable keep-warm (off by default, spends quota)
 octopus warmup reset 15:30 --timezone Europe/Moscow

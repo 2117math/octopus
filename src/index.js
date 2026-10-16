@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import net from 'node:net';
 import { loadOrCreateConfig, loadConfig, saveConfig, atomicConfigUpdate, getConfigPath, getCrashLogPath, loadState, saveState } from './config.js';
 import { installCrashHandlers } from './crash-log.js';
-import { AccountManager, distributionMode, accountRouting } from './account-manager.js';
+import { AccountManager, distributionMode, accountRouting, rebalanceSetting } from './account-manager.js';
 import { validateAdaptiveConfig } from './adaptive-distribution.js';
 import { createProxyServer, reloadedHeaderFlags } from './server.js';
 import { importCredentials, loginOAuth, loginOAuthWithPastedCode, startOAuthLogin, fetchProfile, profileForCredentials, refreshAccessToken, isTokenExpired, isTokenExpiringSoon } from './oauth.js';
@@ -110,6 +110,7 @@ import {
   setBucketThresholds,
   setDistribution,
   setProbeSeconds,
+  setRebalance,
   setThreshold,
   setWarmupSchedule,
   setWarmupSeconds,
@@ -149,6 +150,8 @@ const THRESHOLD_USAGE = [
 ].join('\n');
 
 const DISTRIBUTE_USAGE = 'Usage: octopus distribute <on|off|adaptive>';
+
+const REBALANCE_USAGE = 'Usage: octopus rebalance <on|off|seconds>   (seconds: idle time before a move, min 60; 0 = off)';
 
 const ROUTING_USAGE = [
   'Usage: octopus routing <account-name|email> [--check]      (show the account\'s routing; --check tests it)',
@@ -268,6 +271,10 @@ switch (command) {
     break;
   case 'distribute':
     await distributeCommand();
+    process.exit(0);
+    break;
+  case 'rebalance':
+    await rebalanceCommand();
     process.exit(0);
     break;
   case 'route':
@@ -390,7 +397,7 @@ async function serverCommand() {
     console.error(`[Octopus] Bad adaptiveDistribution setting in ${getConfigPath()}: ${err.message}`);
     process.exit(1);
   }
-  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config) });
+  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions });
   // Names the activity log's session column from Claude Code's own on-disk
   // session titles. Built whether or not the TUI runs, so a reload has one
   // object to reconfigure.
@@ -591,6 +598,11 @@ async function serverCommand() {
     // it to plain even distribution on every config reload.
     config.distributeSessions = diskConfig.distributeSessions ?? false;
     accountManager.setDistributeSessions(config.distributeSessions);
+    // And the idle rebalance (octopus rebalance, the TUI settings screen, or a
+    // hand edit): read per selection off the manager, so the setter is the
+    // whole application. Absent on disk means off again.
+    config.rebalanceSessions = diskConfig.rebalanceSessions;
+    accountManager.setRebalance(config.rebalanceSessions);
     // Pick up a switchThreshold change the same way (teamclaude threshold, the
     // TUI settings screen, or a hand edit). thresholdFor() reads it off the
     // manager on every decision, so assigning it is the whole application —
@@ -723,6 +735,7 @@ async function serverCommand() {
         if (config.eventLogging != null) diskConfig.eventLogging = config.eventLogging;
         if (config.quotaBarPercent != null) diskConfig.quotaBarPercent = config.quotaBarPercent;
         if (config.sessionRows != null) diskConfig.sessionRows = config.sessionRows;
+        if (config.rebalanceSessions != null) diskConfig.rebalanceSessions = config.rebalanceSessions;
         if (config.accountSort != null) diskConfig.accountSort = config.accountSort;
         if (config.defaultClientMode != null) diskConfig.defaultClientMode = config.defaultClientMode;
         if (config.autoRedeemResets != null) diskConfig.autoRedeemResets = config.autoRedeemResets;
@@ -831,6 +844,8 @@ async function serverCommand() {
   // Names each row of the status payload's `sessions.list` from the same cache
   // the activity log reads; null while session titles are off.
   hooks.sessionTitle = (/** @type {string} */ sid) => sessionTitles.get(sid);
+  // The same names for the idle-rebalance log line the manager writes.
+  accountManager.sessionTitle = hooks.sessionTitle;
   hooks.persistAccounts = () => atomicConfigUpdate(mergeAccountsOnto);
 
   // Account controls for the dashboard's POST /teamclaude/{priority,disable}.
@@ -2490,6 +2505,49 @@ async function distributeCommand() {
   await notifyRunningServer(config);
 }
 
+// ── rebalance ───────────────────────────────────────────────
+
+/** The idle-rebalance setting in words, for the CLI. A declaration, not a
+ *  const: the command switch above runs before any const below it is set. */
+function describeRebalance(/** @type {{ enabled: boolean, idleSeconds: number, gap: number }} */ rb) {
+  return rb.enabled
+    ? `on (after ${rb.idleSeconds}s idle, when its account is ${Math.round(rb.gap * 100)}%+ more spent)`
+    : 'off';
+}
+
+async function rebalanceCommand() {
+  const config = await loadOrCreateConfig();
+  const arg = args[1];
+
+  if (arg === undefined) {
+    const current = rebalanceSetting(config.rebalanceSessions);
+    console.log(`Idle rebalance: ${describeRebalance(current)}`);
+    console.log('Set with: octopus rebalance <on|off|seconds>   e.g. octopus rebalance 600');
+    console.log('On: a pinned session that comes back after that long without a request (its');
+    console.log('prompt cache gone) moves to the account a new session would get, when its own');
+    console.log('account is that much more spent this week. Acts only with distribution on.');
+    return;
+  }
+
+  /** @type {{ enabled?: boolean, idleSeconds?: number }|null} */
+  let change = null;
+  if (['on', 'true', 'yes'].includes(arg)) change = { enabled: true };
+  else if (['off', 'false', 'no'].includes(arg)) change = { enabled: false };
+  else if (/^\d+$/.test(arg)) change = { idleSeconds: Number(arg) };
+  if (!change) {
+    console.error(REBALANCE_USAGE);
+    process.exit(1);
+  }
+
+  const next = applyOrExit(() => setRebalance(config, /** @type {any} */ (change)));
+  await saveConfig(config);
+  console.log(`Idle rebalance: ${describeRebalance(next)}.`);
+  if (next.enabled && distributionMode(config.distributeSessions) === 'off') {
+    console.log('Note: it acts only while session distribution is on (octopus distribute on).');
+  }
+  await notifyRunningServer(config);
+}
+
 // ── update ──────────────────────────────────────────────────
 
 // ── callback.net ────────────────────────────────────────────
@@ -2965,6 +3023,11 @@ Commands:
                       Spread new sessions across equal-priority accounts, each
                       pinned to its own for cache reuse (off by default);
                       'adaptive' spreads by remaining weekly credit and load
+  rebalance [on|off|secs]
+                      Move a pinned session that comes back after that many
+                      idle seconds (default 300, its prompt cache gone) to the
+                      account a new session would get, when its own account is
+                      10%+ more spent this week (off by default)
   probe [off|secs]    Opt-in background quota refresh for idle accounts
                       (off by default; reads usage endpoint, spends no quota)
   warmup [off|secs]   Opt-in: keep idle accounts' 5h timers running by sending

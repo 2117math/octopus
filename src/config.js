@@ -105,6 +105,8 @@ export function createDefaultConfig() {
     switchThreshold: 0.98,
     holdSeconds: 0,
     distributeSessions: false,
+    // Idle rebalance of pinned sessions (see rebalanceSetting); off by default.
+    rebalanceSessions: { enabled: false, idleSeconds: 300, gap: 0.10 },
     sessionTitles: { enabled: false, width: 18 },
     quotaBarPercent: false,
     accountSort: 'arranged',

@@ -1,4 +1,4 @@
-import { DEFAULT_SWITCH_THRESHOLD, distributionMode } from './account-manager.js';
+import { DEFAULT_SWITCH_THRESHOLD, distributionMode, rebalanceSetting, MIN_REBALANCE_IDLE_SECONDS } from './account-manager.js';
 import { matchAccounts } from './identity.js';
 import { THRESHOLD_BUCKET_KEYS, WEEKLY_BUCKET_KEYS } from './model.js';
 import { createRollingWarmupSchedule, resolveWarmupSchedule } from './warmup-schedule.js';
@@ -210,6 +210,30 @@ export function setDistribution(config, mode) {
   const changed = distributionMode(config.distributeSessions) !== mode;
   if (changed) config.distributeSessions = DISTRIBUTE_MODES[mode].value;
   return changed;
+}
+
+/**
+ * Idle rebalance: switch it on or off, or set how long a session must have
+ * been idle before it may move, which also switches it on (0 switches it off).
+ * The gap, and any key this does not know, are kept as they are.
+ * @param {Config} config
+ * @param {{ enabled?: boolean, idleSeconds?: unknown }} change
+ * @returns {{ enabled: boolean, idleSeconds: number, gap: number }} the setting now in force
+ */
+export function setRebalance(config, change) {
+  const prev = config.rebalanceSessions && typeof config.rebalanceSessions === 'object' ? config.rebalanceSessions : {};
+  const next = { ...prev, ...rebalanceSetting(prev) };
+  if (change.idleSeconds !== undefined) {
+    const value = wholeSeconds(change.idleSeconds, 'The idle time');
+    if (value > 0 && value < MIN_REBALANCE_IDLE_SECONDS) {
+      throw new ConfigOpError(`Minimum idle time is ${MIN_REBALANCE_IDLE_SECONDS}s (a session that idle has usually still got its prompt cache).`);
+    }
+    if (value === 0) next.enabled = false;
+    else { next.idleSeconds = value; next.enabled = true; }
+  }
+  if (typeof change.enabled === 'boolean') next.enabled = change.enabled;
+  config.rebalanceSessions = next;
+  return rebalanceSetting(next);
 }
 
 // C0 and C1 control characters, ESC and the 8-bit CSI among them. These values

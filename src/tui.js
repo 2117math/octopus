@@ -18,7 +18,8 @@ import { describeRouting, parseRoutingUrl, routingToUrl, checkRouting } from './
 import { sanitizeText, safeLine } from './safe-text.js';
 // The setting rules live in one module; the CLI, the MCP tools and this screen
 // all read them from there, so they cannot drift apart (#426).
-import { MAX_PROBE_SECONDS, ROUTE_COLORS } from './config-ops.js';
+import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
+import { rebalanceSetting } from './account-manager.js';
 import { isLocalUpstream } from './provider.js';
 import { hyperlink, clipboardSequence } from './osc.js';
 /** @typedef {import('./login-flow.js').LoginPrompt} LoginPrompt */
@@ -1363,6 +1364,19 @@ export class TUI {
     });
 
     fields.push({
+      id: 'rebalance',
+      label: 'Idle rebalance',
+      hint: '←→ toggle, Enter idle secs',
+      value: () => {
+        const rb = rebalanceSetting(this.config.rebalanceSessions);
+        return rb.enabled ? green(`on, after ${rb.idleSeconds}s idle`) : gray('off');
+      },
+      left: () => this._toggleRebalance(),
+      right: () => this._toggleRebalance(),
+      enter: () => this._promptInput('Idle rebalance: seconds idle before a move (0=off, min 60)', v => this._doSetRebalanceIdle(v.trim())),
+    });
+
+    fields.push({
       id: 'probe',
       label: 'Quota probe',
       hint: '←→ ±30s',
@@ -2197,6 +2211,44 @@ export class TUI {
     this.config.autoRedeemResets = next;
     if (!await this._saveSetting('auto-redeem', () => { this.config.autoRedeemResets = prev; })) return;
     this._addLog(`Auto-redeem reset credits (Codex and Claude): ${next ? 'on' : 'off'}`);
+    if (this.running) this.render();
+  }
+
+  // Idle rebalance: the same change `octopus rebalance` makes (config-ops), then
+  // handed to the running manager, which reads it per selection. A failed save
+  // puts both back.
+  async _toggleRebalance() {
+    const enabled = !rebalanceSetting(this.config.rebalanceSessions).enabled;
+    await this._applyRebalance({ enabled });
+  }
+
+  async _doSetRebalanceIdle(input) {
+    if (!/^\d+$/.test(input)) {
+      this._addLog('Invalid idle time — enter 0 (off) or seconds'); this.mode = 'settings'; if (this.running) this.render(); return;
+    }
+    await this._applyRebalance({ idleSeconds: Number(input) });
+    this.mode = 'settings';
+    if (this.running) this.render();
+  }
+
+  /** @param {{ enabled?: boolean, idleSeconds?: number }} change */
+  async _applyRebalance(change) {
+    const prev = this.config.rebalanceSessions;
+    let next;
+    try { next = setRebalance(this.config, change); }
+    catch (/** @type {any} */ e) {
+      if (!(e instanceof ConfigOpError)) throw e;
+      this.config.rebalanceSessions = prev;
+      this._addLog(`Invalid idle time — ${e.message}`);
+      if (this.running) this.render();
+      return;
+    }
+    this.am.setRebalance?.(this.config.rebalanceSessions);
+    if (!await this._saveSetting('idle rebalance', () => {
+      this.config.rebalanceSessions = prev;
+      this.am.setRebalance?.(prev);
+    })) return;
+    this._addLog(`Idle rebalance: ${next.enabled ? `on, after ${next.idleSeconds}s idle` : 'off'}`);
     if (this.running) this.render();
   }
 
@@ -3697,6 +3749,9 @@ export class TUI {
     lines.push(row(byId('autoRedeemResets')));
     lines.push(dim('  Spend a free Codex rate-limit reset credit when the whole pool'));
     lines.push(dim('  is dry. Irreversible and scarce — off unless you say otherwise.'));
+    lines.push(row(byId('rebalance')));
+    lines.push(dim('  A session back from a break (its cache gone) moves to a less-spent'));
+    lines.push(dim('  account. Acts only with session distribution on.'));
     lines.push('');
     // ── Quota probe
     lines.push(bold('  Quota probe') + dim('  — refresh idle accounts from the usage endpoint'));
