@@ -606,7 +606,7 @@ export function createProxyServer(accountManager, config, hooks = {}, sx = null,
         const status = accountManager.getStatus({ sessionDetail: config.proxy?.sessionDetail === true });
         // One row per client session (title, account, last request), which is
         // what `octopus sessions`, `octopus move` and the attached TUI's
-        // session rows read. Operator callers only: a session title is the
+        // Sessions panel read. Operator callers only: a session title is the
         // subject of someone's conversation, and a client key holder is a
         // tenant, not the person who runs the proxy. Kept apart from
         // `sessions.items`, the per-conversation detail proxy.sessionDetail

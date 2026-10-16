@@ -94,14 +94,16 @@ const shortSid = sid => (SAFE_SID.test(sid) ? sid : safeLine(sid, 64) || '?').sl
 const sessionTag = (sid, title = null, width = SESSION_ID_LEN) =>
   sid ? fg(sessionColorCode(sid), rpad(truncate(title || shortSid(sid), width), width)) : ' '.repeat(width);
 
-// The per-account session row (under each account) lists the sessions pinned
-// there that made a request this recently. Longer than the tracker's active
-// window, so a session between turns stays visible, and far shorter than its
-// known hour, so the row is about what is running rather than what lingers.
+// An account's name is painted in the colours of the sessions pinned there
+// that made a request this recently. Longer than the tracker's active window,
+// so a session between turns keeps its colour, and far shorter than its known
+// hour, so the colours are about what is running rather than what lingers.
 const SESSION_ROW_WINDOW_MS = 10 * 60 * 1000;
-// Columns one session label may take on that row, so a long generated title
-// cannot crowd every other session off it.
-const SESSION_ROW_LABEL_W = 24;
+// The Sessions panel under the account list: at most this many session lines
+// (the rest are counted), and the widest an account or model column may get.
+const SESSIONS_PANEL_MAX = 8;
+const SESSIONS_PANEL_ACCT_W = 32;
+const SESSIONS_PANEL_MODEL_W = 12;
 const strike = s => `${ESC}9m${s}${RESET}`;
 // "3m ago" for a session's last request; the tracker forgets one after an hour.
 function formatAgo(ms) {
@@ -1445,7 +1447,7 @@ export class TUI {
 
     fields.push({
       id: 'sessionRows',
-      label: 'Session rows',
+      label: 'Sessions panel',
       hint: '←→ toggle',
       value: () => (this.config.sessionRows !== false ? green('on') : gray('off')),
       left: () => this._toggleSessionRows(),
@@ -2323,8 +2325,8 @@ export class TUI {
     const prev = this.config.sessionRows;
     const on = prev === false;
     this.config.sessionRows = on;
-    if (!await this._saveSetting('session rows', () => { this.config.sessionRows = prev; })) return;
-    this._addLog(`Session rows: ${on ? 'on' : 'off'}`);
+    if (!await this._saveSetting('sessions panel', () => { this.config.sessionRows = prev; })) return;
+    this._addLog(`Sessions panel: ${on ? 'on' : 'off'}`);
     if (this.running) this.render();
   }
 
@@ -2780,11 +2782,8 @@ export class TUI {
       const groups = this._providerGroups();
       const split = groups.length === 2 ? this._splitLayout(groups, W) : null;
       // The sessions each account is carrying: their colours run under its
-      // name, and on the main dashboard a line under the row names them. Every
-      // such line is one fewer for the activity log below.
+      // name. The sessions themselves are listed in their own panel below.
       const sessionRows = this._sessionRowsByAccount();
-      const sessionLine = (/** @type {number|undefined} */ idx, /** @type {number} */ w) =>
-        (idx == null || !sessionRows || this.mode !== 'normal' ? null : this._sessionRowLine(sessionRows.get(idx) || [], w));
       if (split) {
         const [a, b] = groups;
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
@@ -2792,9 +2791,6 @@ export class TUI {
           const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current, sessionRows) : '';
           const right = r < b.indices.length ? this._renderRow(b.indices[r], split.right, current, sessionRows) : '';
           lines.push(fitLine(left, split.leftW) + dim(PANE_GUTTER) + right);
-          const ls = sessionLine(a.indices[r], split.leftW);
-          const rs = sessionLine(b.indices[r], split.rightW);
-          if (ls || rs) lines.push(fitLine(ls || '', split.leftW) + dim(PANE_GUTTER) + (rs || ''));
         }
       } else {
         // The spacer above the list carries the fleet summary when there is one.
@@ -2803,10 +2799,11 @@ export class TUI {
         const layout = this._listLayout(order, W);
         for (const i of order) {
           lines.push(this._renderRow(i, layout, current, sessionRows));
-          const sl = sessionLine(i, W);
-          if (sl) lines.push(sl);
         }
       }
+      // ── Sessions: one line per known session, on the main dashboard only.
+      // Every such line is one fewer for the activity log below.
+      if (this.mode === 'normal') lines.push(...this._sessionsPanel(W));
     }
 
     // Routing is surfaced inline on each account row (see _renderAcct): a colored
@@ -3154,7 +3151,7 @@ export class TUI {
    * Account index to the sessions pinned there that made a request within
    * SESSION_ROW_WINDOW_MS, newest first; null when sessionRows is off or no
    * session qualifies. The name colours follow it on every screen that draws
-   * the rows; the line under a row is the main dashboard's only (see _render).
+   * the rows.
    * @returns {Map<number, any[]>|null}
    */
   _sessionRowsByAccount() {
@@ -3172,30 +3169,43 @@ export class TUI {
   }
 
   /**
-   * One account's session line, at most `width` columns: a dot in the
-   * session's own colour (filled while it is active, hollow after), its
-   * label, and `+N` for the sessions that do not fit. Null when there are none.
-   * @param {any[]} items
-   * @param {number} width
+   * The Sessions panel under the account list: a header in the Activity
+   * header's style, then one line per known session, newest first —
+   * `● title  → account  model  3m ago`, the dot in the session's own colour
+   * (filled while it is active, hollow after), `[TC_ACCT]` when the client
+   * pinned it. At most SESSIONS_PANEL_MAX lines, the rest counted. Empty when
+   * sessionRows is off or no session is known, so the panel takes no room.
+   * Every line is cut to `W` columns.
+   * @param {number} W
+   * @returns {string[]}
    */
-  _sessionRowLine(items, width) {
-    if (!items.length) return null;
-    let line = '     ';   // under the account name, clear of the marker columns
-    let shown = 0;
-    for (let i = 0; i < items.length; i++) {
-      const s = items[i];
-      const label = truncate(this._sessionLabel(s), SESSION_ROW_LABEL_W);
+  _sessionsPanel(W) {
+    if (this.config?.sessionRows === false) return [];
+    const items = this._sessionItems();
+    if (!items.length) return [];
+    const shown = items.slice(0, SESSIONS_PANEL_MAX);
+    // The label column is as wide as the longest label shown, up to the
+    // session-title width; a list of bare ids keeps to their six columns.
+    const titleW = Number.isInteger(this.sessionTitles?.width) ? this.sessionTitles.width : DEFAULT_TITLE_WIDTH;
+    const labelW = Math.max(SESSION_ID_LEN, Math.min(titleW, Math.max(...shown.map(s => vw(this._sessionLabel(s))))));
+    const acctW = Math.min(SESSIONS_PANEL_ACCT_W, Math.max(...shown.map(s => vw(this._sessionAccountName(s)))));
+    const modelW = Math.min(SESSIONS_PANEL_MODEL_W, Math.max(...shown.map(s => vw(modelTag(s.model)))));
+    const pinned = shown.some(s => s.clientPinned);
+    const hdr = ` Sessions (${items.length}) `;
+    const out = ['', hdr + dim('─'.repeat(Math.max(1, W - vw(hdr))))];
+    for (const s of shown) {
       const dot = fg(sessionColorCode(s.id), s.active ? '●' : '○');
-      const piece = `${shown ? '  ' : ''}${dot} ${s.active ? label : dim(label)}`;
-      const rest = items.length - i - 1;
-      const reserve = rest ? vw(`  +${rest}`) : 0;
-      if (vw(line) + vw(piece) + reserve > width) break;
-      line += piece;
-      shown++;
+      const label = rpad(truncate(this._sessionLabel(s), labelW), labelW);
+      const acct = rpad(truncate(this._sessionAccountName(s), acctW), acctW);
+      const model = rpad(truncate(modelTag(s.model), modelW), modelW);
+      const pin = s.clientPinned ? `  ${dim('[TC_ACCT]')}` : '';
+      const ago = pinned ? rpad(formatAgo(s.lastSeen), 7) : formatAgo(s.lastSeen);
+      const row = ` ${dot} ${s.active ? label : dim(label)}  → ${acct}  ${model}  ${dim(ago)}${pin}`;
+      out.push(truncate(row.trimEnd(), W));
     }
-    const hidden = items.length - shown;
-    if (hidden) line += dim(`${shown ? '  ' : ''}+${hidden}`);
-    return line;
+    const hidden = items.length - shown.length;
+    if (hidden) out.push(truncate(`   ${dim(`… +${hidden} more`)}`, W));
+    return out;
   }
 
   // ── session move (`m`) ─────────────────────────────
@@ -3882,7 +3892,7 @@ export class TUI {
     lines.push(bold('  Quota bars') + dim('  — what the bar on each account row carries'));
     lines.push(row(byId('quotaBarPercent')));
     lines.push(row(byId('sessionRows')));
-    lines.push(dim('  Under each account, its sessions that made a request in the last 10 minutes.'));
+    lines.push(dim('  A panel under the accounts listing each known session and its account.'));
     lines.push('');
     // ── Activity log
     lines.push(bold('  Activity log') + dim('  — what to do with Claude Code\'s telemetry'));

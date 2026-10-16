@@ -239,7 +239,7 @@ function frame(tui, { raw = false } = {}) {
   return (raw ? buf : plain(buf)).split('\r\n');
 }
 
-test('the dashboard draws each account\'s recent sessions under its row', () => {
+test('the dashboard lists sessions in their own panel, not under the account rows', () => {
   const am = new AccountManager([oauth('a@x.com'), oauth('b@x.com')], 0.98, { distributeSessions: true });
   am.beginSession(SID, { sessionId: SID, model: OPUS });
   am.recordSession(SID, 1, OPUS);   // in flight: active
@@ -253,20 +253,22 @@ test('the dashboard draws each account\'s recent sessions under its row', () => 
   const tui = makeTUI(am);
   tui.sessionTitles = /** @type {any} */ (titles);
   const lines = frame(tui);
-  const row = lines.findIndex(l => l.includes('b@x.com'));
-  assert.match(lines[row + 1], /^\s+● 로그인 버그 고치기\s*$/, 'the active session, named, on the line under its account');
-  assert.equal(lines.filter(l => l.includes('aa11bb')).length, 0, 'a session idle past ten minutes is not drawn');
-  assert.doesNotMatch(lines[lines.findIndex(l => l.includes('a@x.com')) + 1], /[●○]/, 'an account with no sessions gets no line');
+  const row = lines.findIndex(l => l.includes('b@x.com') && !/[●○]/.test(l));
+  assert.doesNotMatch(lines[row + 1], /[●○]/, 'no session line under the account any more');
+  assert.doesNotMatch(lines[lines.findIndex(l => l.includes('a@x.com')) + 1], /[●○]/, 'nor under one with no sessions');
+  assert.match(lines.find(l => l.includes('로그인 버그 고치기')) || '', /● 로그인 버그 고치기\s+→ b@x\.com/, 'the active session, named, in the panel with its account');
+  assert.match(lines.find(l => l.includes('aa11bb')) || '', /○ aa11bb/, 'an idle session is listed hollow');
 
   const off = makeTUI(am, { sessionRows: false });
   off.sessionTitles = /** @type {any} */ (titles);
   assert.equal(frame(off).filter(l => /[●○]/.test(l)).length, 0, 'sessionRows: false draws the old layout');
 
-  // Many sessions on one account: what does not fit is counted, not cut.
+  // Many sessions: what does not fit is counted, not cut.
   const many = am.sessionList();
-  const line = tui._sessionRowLine(Array.from({ length: 12 }, (_, i) => ({ ...many[0], id: `${i}`.padStart(8, 'a'), title: `session number ${i}` })), 80);
-  assert.ok(plain(line).length <= 80);
-  assert.match(plain(line), /\+\d+$/);
+  tui._sessionItems = () => Array.from({ length: 12 }, (_, i) => ({ ...many[0], id: `${i}`.padStart(8, 'a'), title: `session number ${i}` }));
+  const panel = tui._sessionsPanel(80).map(plain);
+  assert.ok(panel.every(l => l.length <= 80));
+  assert.match(panel[panel.length - 1], /\+4 more$/);
 });
 
 test('the colours of an account\'s sessions run under its name, split between them', () => {

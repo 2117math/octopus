@@ -644,7 +644,7 @@ async function serverCommand() {
     config.quotaBarPercent = diskConfig.quotaBarPercent === true;
     // The activity row format, read per row the same way; 'full' unless 'compact'.
     config.activityFormat = diskConfig.activityFormat === 'compact' ? 'compact' : 'full';
-    // The same, for the per-account session rows; on unless set to false.
+    // The same, for the Sessions panel; on unless set to false.
     config.sessionRows = diskConfig.sessionRows !== false;
     config.accountSort = ACCOUNT_SORTS.includes(diskConfig.accountSort) ? diskConfig.accountSort : 'arranged';
     // Read by `run`/`env` from disk, but the TUI settings screen shows it live.
