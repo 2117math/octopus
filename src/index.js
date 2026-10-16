@@ -35,7 +35,7 @@ import { ResetCreditRedeemer } from './codex-reset-credits.js';
 import { ClaudeResetRedeemer } from './claude-resets.js';
 import { Warmer, warmApplicable } from './warmer.js';
 import { formatWarmupScheduleConfirmation, resolveWarmupConfig } from './warmup-schedule.js';
-import { TUI, ACCOUNT_SORTS } from './tui.js';
+import { TUI, ACCOUNT_SORTS, displayWidth } from './tui.js';
 import { SessionTitles } from './session-titles.js';
 import { captureEarlyConsole } from './early-log.js';
 import { RemoteControl, createAttachSession } from './tui-remote.js';
@@ -212,6 +212,14 @@ switch (command) {
     break;
   case 'switch':
     await switchCommand();
+    process.exit(0);
+    break;
+  case 'sessions':
+    await sessionsCommand();
+    process.exit(0);
+    break;
+  case 'move':
+    await moveCommand();
     process.exit(0);
     break;
   case 'remove':
@@ -1846,6 +1854,168 @@ async function switchCommand() {
   }
 }
 
+// ── sessions / move ─────────────────────────────────────────
+
+// The sessions a RUNNING server knows, one per client session, from the status
+// payload's `sessions.list`. Like `switch`, both commands only talk to the
+// server: a session pin is runtime state that lives and dies with the process.
+
+/** The server's session list, or exit with the reason it could not be read. */
+async function fetchSessionList(/** @type {any} */ config) {
+  const port = config.proxy.port;
+  let data = null;
+  let status = 0;
+  try {
+    const res = await fetch(`http://localhost:${port}/teamclaude/status`, {
+      // Not kept alive, here or in `move`'s request after it: on Windows (Node
+      // 24), exiting after two requests over one kept-alive socket trips a libuv
+      // assertion that ends the process with a nonzero code, after the move has
+      // already succeeded.
+      headers: { 'x-api-key': config.proxy.apiKey, connection: 'close' },
+      signal: AbortSignal.timeout(5_000),
+    });
+    status = res.status;
+    data = res.ok ? await res.json().catch(() => null) : null;
+  } catch (err) {
+    console.error('Cannot connect to proxy at localhost:' + port);
+    console.error('Is the server running? Start with: octopus server');
+    if (/** @type {any} */ (err)?.message) console.error(`Details: ${/** @type {any} */ (err).message}`);
+    process.exit(1);
+  }
+  if (!data || !Array.isArray(data.accounts)) {
+    console.error(`Unexpected reply from localhost:${port} (HTTP ${status}) — no account list in it.`);
+    process.exit(1);
+  }
+  const list = data.sessions?.list;
+  if (!Array.isArray(list)) {
+    console.error('The server does not report its sessions: it predates this command (restart it), or this key is a client key.');
+    process.exit(1);
+  }
+  return list.filter((/** @type {any} */ s) => typeof s?.id === 'string');
+}
+
+/** `s` cut and padded to `w` display columns, so CJK titles keep the table aligned. */
+function cell(/** @type {string} */ s, /** @type {number} */ w) {
+  let out = '';
+  let used = 0;
+  for (const ch of s) {
+    const cw = displayWidth(ch);
+    if (used + cw > w) break;
+    out += ch;
+    used += cw;
+  }
+  return out + ' '.repeat(Math.max(0, w - used));
+}
+
+/** How long ago, from the list's `lastSeen` (ms). */
+function agoText(/** @type {unknown} */ ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '?';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  return m < 60 ? `${m}m ago` : `${Math.floor(m / 60)}h ago`;
+}
+
+/** A session as the operator knows it: its title, else the start of its id.
+ *  A declaration, not a const: the command switch above runs before any const
+ *  below it is initialised. */
+function sessionName(/** @type {any} */ s) {
+  return safeLine(s.title || s.id.slice(0, 8), 120) || '?';
+}
+
+async function sessionsCommand() {
+  const config = await loadOrCreateConfig();
+  const list = await fetchSessionList(config);
+  if (args.includes('--json')) {
+    await writeStdout(`${JSON.stringify(list, null, 2)}\n`);
+    return;
+  }
+  if (!list.length) {
+    console.log('The server knows no sessions (one is forgotten an hour after its last request).');
+    return;
+  }
+  const rows = list.map((/** @type {any} */ s) => [
+    sessionName(s),
+    safeLine(s.id, 128).slice(0, 8),
+    s.accountName == null ? '-' : safeLine(s.accountName, 64),
+    agoText(s.lastSeen),
+    s.model == null ? '-' : safeLine(s.model, 32),
+    (s.active ? 'yes' : 'no') + (s.clientPinned ? ' (TC_ACCT)' : ''),
+  ]);
+  const head = ['SESSION', 'ID', 'ACCOUNT', 'LAST', 'MODEL', 'ACTIVE'];
+  const caps = [40, 8, 32, 8, 24, 16];
+  const widths = head.map((h, i) => Math.min(caps[i], Math.max(displayWidth(h), ...rows.map((/** @type {string[]} */ r) => displayWidth(r[i])))));
+  const line = (/** @type {string[]} */ r) => r.map((v, i) => cell(v, widths[i])).join('  ').trimEnd();
+  const out = [line(head), ...rows.map(line)];
+  out.push('', 'Move one with: octopus move <session> <account>');
+  await writeStdout(`${out.join('\n')}\n`);
+}
+
+async function moveCommand() {
+  const config = await loadOrCreateConfig();
+  const port = config.proxy.port;
+  const query = args[1] && !args[1].startsWith('-') ? args[1].trim() : '';
+  const account = args[2] && !args[2].startsWith('-') ? args[2].trim() : '';
+  if (!query || !account) {
+    console.error('Usage: octopus move <session> <account>');
+    console.error('  <session>  part of its title, or the start of its id (see: octopus sessions)');
+    console.error('  <account>  name, email or index');
+    process.exit(1);
+  }
+  const list = await fetchSessionList(config);
+  // An exact id wins outright; otherwise an id prefix or a piece of the title,
+  // and it has to name exactly one session.
+  const q = query.toLowerCase();
+  const exact = list.filter((/** @type {any} */ s) => s.id === query);
+  const loose = list.filter((/** @type {any} */ s) => s.id.toLowerCase().startsWith(q)
+    || (typeof s.title === 'string' && s.title.toLowerCase().includes(q)));
+  const matches = exact.length ? exact : loose;
+  if (matches.length !== 1) {
+    const shown = safeLine(query, 64);
+    console.error(matches.length
+      ? `"${shown}" matches ${matches.length} sessions; be more specific:`
+      : `No known session matches "${shown}".${list.length ? ' Known sessions:' : ''}`);
+    // The whole id: two candidates can share any shorter prefix of it.
+    for (const s of (matches.length ? matches : list).slice(0, 20)) {
+      console.error(`  ${safeLine(s.id, 128)}  ${sessionName(s)}  → ${s.accountName == null ? '-' : safeLine(s.accountName, 64)}`);
+    }
+    process.exit(1);
+  }
+  const [session] = matches;
+  let data = {};
+  let res;
+  try {
+    res = await fetch(`http://localhost:${port}/teamclaude/session-move`, {
+      method: 'POST',
+      // Not kept alive: see fetchSessionList.
+      headers: { 'x-api-key': config.proxy.apiKey, 'Content-Type': 'application/json', connection: 'close' },
+      body: JSON.stringify({ session: session.id, account }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    data = await res.json().catch(() => ({}));
+  } catch (err) {
+    console.error('Cannot connect to proxy at localhost:' + port);
+    if (/** @type {any} */ (err)?.message) console.error(`Details: ${/** @type {any} */ (err).message}`);
+    process.exit(1);
+  }
+  if (!res.ok || data?.ok !== true) {
+    const detail = typeof data?.error === 'string' ? safeLine(data.error, 200) : null;
+    console.error(detail || `Move failed: unexpected reply from localhost:${port} (HTTP ${res.status}).`);
+    if (!detail) console.error('An older server without this endpoint answers this way; restart it to pick up the new version.');
+    if (Array.isArray(data?.accounts) && data.accounts.length) {
+      console.error('Known accounts:');
+      for (const n of data.accounts) console.error(`  ${safeLine(n, 64)}`);
+    }
+    process.exit(1);
+  }
+  const from = typeof data.from === 'string' ? safeLine(data.from, 64) : '?';
+  const to = typeof data.to === 'string' ? safeLine(data.to, 64) : safeLine(account, 64);
+  console.log(`Moved session "${sessionName(session)}" ${from} → ${to} (applies from its next request)`);
+  // A client pin outranks the session pin, so this move steers nothing while
+  // the client keeps sending one.
+  if (data.clientPinned === true) console.error('Warning: the client pins this session with TC_ACCT; the move has no effect.');
+}
+
 // ── accounts ────────────────────────────────────────────────
 
 async function accountsCommand() {
@@ -2771,6 +2941,12 @@ Commands:
   accounts            List configured accounts
   switch [NAME]       Make the running server prefer one account (as 's' in the
                       TUI does); with no NAME, list accounts and mark the current
+  sessions [--json]   List the sessions the running server knows: title, the
+                      account each is pinned to, last request, model
+  move <session> <account>
+                      Move one session onto another account (as 'm' in the TUI
+                      does); <session> is part of its title or the start of its
+                      id. Applies from the session's next request
   remove <name>       Remove an account (by name or email; --org to disambiguate)
   disable <name>      Temporarily exclude an account from rotation
   enable <name>       Re-enable a disabled account (also clears a stuck error)

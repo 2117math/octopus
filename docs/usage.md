@@ -111,11 +111,27 @@ curl -X POST http://localhost:3456/teamclaude/priority \
 
 `POST /teamclaude/priority` takes `{"account", "place": "first" | "last"}` or `{"account", "priority": <integer>}`; `POST /teamclaude/disable` takes `{"account", "disabled": true | false}`. Both accept an optional `"org"` (name or uuid) for an email that holds accounts in several orgs — an ambiguous name is refused rather than guessed. Unlike `switch`, these are config **writes**: the change is saved to the config file under the same lock the TUI uses, and the server reloads itself afterwards, so it survives a restart. `place` is relative — `first` lands one below the lowest priority in the fleet, `last` one above the highest — and the reply carries the account as it now stands (`{"ok": true, "name": ..., "priority": ...}` or `{"ok": true, "name": ..., "disabled": ...}`), so a caller learns the number it did not choose. An unknown or ambiguous account, or a priority that is not an integer, is a `400` with the reason; a write that landed but whose reload failed is a `500` that says so, since the file did change. A request authenticated with a `proxy.clientKeys` entry is refused with `403`: a client key is for using the fleet, not for changing which accounts it contains. Use the shared proxy key, or call from the proxy's own machine.
 
+### Per-session markers and moving a session
+
+With `distributeSessions` on, each Claude Code session stays on the account it first landed on, so its prompt cache stays warm there. The dashboard shows where each one is. Under every account row, a line lists the sessions pinned to it that made a request in the last 10 minutes: `●` while the session is active (a request in the last two minutes), `○` after that, in the session's own colour, labelled with its [title](#session-titles-in-the-activity-log) or the start of its id. Sessions that do not fit are counted as `+N`. Each such line takes one line from the activity log. Turn the lines off with **g** → **Session rows** (`sessionRows: false` in the config); the dashboard then looks as it did before.
+
+**m** moves a session. The first list holds every session the proxy knows, newest first, with the account it is on, its last request and its model; `[TC_ACCT]` marks one whose client pins its own account. Pick one, and the second list shows the accounts with their session and weekly use. The cursor starts on the account with the least weekly use that can take the session, and an account that cannot (disabled, out of quota, over the threshold) is struck through. `Enter` moves the session, `Esc` cancels. Every pin the session holds moves, its subagents' included, and the move applies from its next request. Its prompt cache does not come along, so that request reads its context afresh on the new account. **s** is a different thing: it changes the account new sessions start on and leaves placed sessions where they are. A client pin (`TC_ACCT`, `/tc-acct/`) outranks the session pin, so moving such a session has no effect, and the log line says so.
+
+The same, headless:
+
+```bash
+octopus sessions                          # title, account, last request, model, active
+octopus move "login bug" me@example.com   # by part of its title or the start of its id
+```
+
+`octopus move` refuses a match that names more than one session and lists the candidates. Both commands use the control plane. `GET /teamclaude/status` carries the list as `sessions.list`: at most 100 rows, newest first, each with `id`, `title`, `account`, `accountName`, `lastSeen` (ms ago), `active`, `model` and `clientPinned`. `POST /teamclaude/session-move` takes `{"session": "<id or its start>", "account": "<name, email or index>"}` and answers `{"ok": true, "session": ..., "from": ..., "to": ...}`; an ambiguous session is a `400` with the candidates, an unknown session or account a `404`. A request with a `proxy.clientKeys` key gets no list and is refused the move with `403`, since a session title names someone's work. `octopus attach` reads the same list and moves with **m** as well.
+
 ### TUI keyboard shortcuts
 
 | Key | Action |
 | --- | --- |
 | `s` | Switch active account (`←`/`→` picks the default account or a specific [route](routing.md#model-routes)) |
+| `m` | Move a session to another account (see [Per-session markers and moving a session](#per-session-markers-and-moving-a-session)) |
 | `d` | Enable/disable an account |
 | `l` | Sign an account in again (opens on the first account in `error`; not in attach mode). A panel shows the sign-in link, clickable and copied to the clipboard, and takes the pasted answer back, so it works over SSH — see [Signing in again from the TUI](accounts.md#signing-in-again-from-the-tui) |
 | `p` | Refresh quota on all accounts (one-shot probe of the zero-spend usage endpoint) |
@@ -202,6 +218,8 @@ octopus attach            # Open the live dashboard against a running server
 octopus dashboard         # Open the web dashboard in the browser (needs server)
 octopus service install   # Run the proxy as a login service (uninstall/status/print)
 octopus switch [name]     # Prefer an account; no name lists them (needs server)
+octopus sessions          # List the sessions the server knows (needs server)
+octopus move <s> <acct>   # Move one session to another account (needs server)
 octopus remove <name>     # Remove an account (by name or email)
 octopus disable <name>    # Temporarily exclude an account from rotation
 octopus enable <name>     # Re-enable it (also clears a stuck error state)
