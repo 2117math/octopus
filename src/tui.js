@@ -21,6 +21,7 @@ import { sanitizeText, safeLine } from './safe-text.js';
 import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
 import { rebalanceSetting } from './account-manager.js';
 import { sessionColorCode } from './session-color.js';
+import { DEFAULT_WIDTH as DEFAULT_TITLE_WIDTH } from './session-titles.js';
 import { isLocalUpstream } from './provider.js';
 import { hyperlink, clipboardSequence } from './osc.js';
 /** @typedef {import('./login-flow.js').LoginPrompt} LoginPrompt */
@@ -677,6 +678,31 @@ function modelParen(label, effort, dimModel) {
   return `${paint(` (${label.slice(0, -suffix.length)}`)}${effortGrey(suffix)}${paint(')')}`;
 }
 
+// The compact activity format (activityFormat: 'compact') drops the method and
+// the path, which on almost every row is `POST /v1/messages?beta=true` and says
+// nothing. A request that is not a plain messages call keeps a short tag in
+// their place: `count` for count_tokens, else the last path segment.
+const PLAIN_MESSAGES_PATH = /^\/v1\/messages(\?.*)?$/;
+// The session label's width in compact rows when the config leaves it at the
+// default: the room the path gave back, so a generated title (a sentence) fits.
+const COMPACT_TITLE_WIDTH = 32;
+/** @param {unknown} path @returns {string} '' for a plain messages call */
+function compactPathTag(path) {
+  const p = typeof path === 'string' ? path : '';
+  if (PLAIN_MESSAGES_PATH.test(p)) return '';
+  const bare = p.split('?')[0];
+  if (/^\/v1\/messages\/count_tokens\/?$/.test(bare)) return 'count';
+  const last = bare.split('/').filter(Boolean).pop();
+  return last ? safeLine(last, 24) : '?';
+}
+/** A model paren (modelParen) without its leading space, for a row that puts
+ *  its own separator in front. @param {string} paren */
+const unlead = (paren) => paren.replace(' (', '(');
+/** The status slot of a compact row: nothing for a 2xx, a red mark otherwise.
+ *  @param {unknown} status */
+const compactStatus = (status) => (typeof status === 'number' && status >= 200 && status < 300
+  ? '' : `${red(`✗ ${status ?? '?'}`)} `);
+
 // A stored key, shown enough to recognise and no more. First-4/last-4 on a key
 // of eight characters or fewer is the whole key; a short one shows its tail only.
 export function maskKey(key) {
@@ -1064,7 +1090,23 @@ export class TUI {
   _sessionTag(sid) {
     const titles = this.sessionTitles;
     if (!titles?.enabled) return sessionTag(sid);
-    return sessionTag(sid, titles.get(sid), titles.width);
+    return sessionTag(sid, titles.get(sid), this._sessionTagWidth());
+  }
+
+  /** Whether activity rows use the compact format (see compactPathTag). Read
+   *  per row off the shared config, so a reload or the settings toggle applies
+   *  to the next row. */
+  _compactActivity() {
+    return this.config?.activityFormat === 'compact';
+  }
+
+  /** Columns the session label takes in an activity row, live and completed
+   *  alike so the two stay aligned: the configured width, except that compact
+   *  rows widen the default (18, which a fresh config also writes out) to
+   *  COMPACT_TITLE_WIDTH. Any other width is the operator's and stands. */
+  _sessionTagWidth() {
+    const w = this.sessionTitles.width;
+    return this._compactActivity() && w === DEFAULT_TITLE_WIDTH ? COMPACT_TITLE_WIDTH : w;
   }
 
   // ── server hooks ───────────────────────────────────
@@ -1104,7 +1146,13 @@ export class TUI {
     const model = modelParen(modelLabel(info.model, info.effort), info.effort, false); // shown when the request named a model
     const sid = info.sessionId || r?.sessionId || null;
     const pin = (info.pinned || r?.pinned) ? dim(' [pin]') : '';
-    this._addLog(`${this._sessionTag(sid)} ${info.method} ${info.path}${model} → ${acct}${pin} (${info.status}, ${dur}s)`);
+    if (this._compactActivity()) {
+      const tag = compactPathTag(info.path);
+      const what = [tag && dim(tag), model && unlead(model)].filter(Boolean).join(' ');
+      this._addLog([this._sessionTag(sid), what, `→ ${acct}${pin}`, `${compactStatus(info.status)}${dur}s`].filter(Boolean).join('  '));
+    } else {
+      this._addLog(`${this._sessionTag(sid)} ${info.method} ${info.path}${model} → ${acct}${pin} (${info.status}, ${dur}s)`);
+    }
     if (this.active.size === 0) this._retick();   // animating → idle
   }
 
@@ -1416,6 +1464,16 @@ export class TUI {
       left: () => this._cycleEventLogging(-1),
       right: () => this._cycleEventLogging(+1),
       enter: () => this._cycleEventLogging(+1),
+    });
+
+    fields.push({
+      id: 'activityFormat',
+      label: 'Activity format',
+      hint: '←→ toggle',
+      value: () => (this._compactActivity() ? green('compact') : gray('full')),
+      left: () => this._toggleActivityFormat(),
+      right: () => this._toggleActivityFormat(),
+      enter: () => this._toggleActivityFormat(),
     });
 
     fields.push({
@@ -2246,6 +2304,17 @@ export class TUI {
     if (this.running) this.render();
   }
 
+  async _toggleActivityFormat() {
+    // 'full' unless set to 'compact'; rows already in the log keep the format
+    // they were written in.
+    const prev = this.config.activityFormat;
+    const next = this._compactActivity() ? 'full' : 'compact';
+    this.config.activityFormat = next;
+    if (!await this._saveSetting('activity format', () => { this.config.activityFormat = prev; })) return;
+    this._addLog(`Activity format: ${next}`);
+    if (this.running) this.render();
+  }
+
   async _toggleSessionRows() {
     // On unless set to false, so the first toggle from a config without the
     // key writes `false`: the comparison, not a negation, again.
@@ -2759,7 +2828,14 @@ export class TUI {
       const m = modelParen(modelLabel(r.model, r.effort), r.effort, true); // filled in as soon as the model is peeked from the stream
       const pin = r.pinned ? dim(' [pin]') : '';
       const a = r.account ? ` → ${r.account}${pin}` : '';
-      lines.push(` ${sp} ${gray(r.t)}  ${this._sessionTag(r.sessionId)} ${r.method} ${r.path}${m}${a} ${dim(`(${el}s...)`)}`);
+      if (this._compactActivity()) {
+        const tag = compactPathTag(r.path);
+        const what = [tag && dim(tag), m && unlead(m)].filter(Boolean).join(' ');
+        const row = [this._sessionTag(r.sessionId), what, a.trimStart(), dim(`(${el}s...)`)].filter(Boolean).join('  ');
+        lines.push(` ${sp} ${gray(r.t)}  ${row}`);
+      } else {
+        lines.push(` ${sp} ${gray(r.t)}  ${this._sessionTag(r.sessionId)} ${r.method} ${r.path}${m}${a} ${dim(`(${el}s...)`)}`);
+      }
     }
 
     // Completed log
@@ -3809,6 +3885,7 @@ export class TUI {
     // ── Activity log
     lines.push(bold('  Activity log') + dim('  — what to do with Claude Code\'s telemetry'));
     lines.push(row(byId('eventlog')));
+    lines.push(row(byId('activityFormat')));
     if (byId('sessionTitles')) lines.push(row(byId('sessionTitles')));
     lines.push('');
     // ── Launch

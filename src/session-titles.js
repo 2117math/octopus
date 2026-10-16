@@ -42,7 +42,7 @@ const DEFAULT_TAIL_BYTES = 64 * 1024;
  *  named or not, so the columns after it stay aligned. A typed name fits: the
  *  longest in use is "adv-review-rewrite" at 18. A generated title is a sentence
  *  and is cut. */
-const DEFAULT_WIDTH = 18;
+export const DEFAULT_WIDTH = 18;
 
 /** The activity log falls back to this many hex characters of the session id,
  *  so a label can never be narrower. */

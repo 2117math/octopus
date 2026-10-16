@@ -109,6 +109,8 @@ export function createDefaultConfig() {
     rebalanceSessions: { enabled: false, idleSeconds: 300, gap: 0.10 },
     sessionTitles: { enabled: false, width: 18 },
     quotaBarPercent: false,
+    // Activity rows: 'full' (method and path) or 'compact' (wider session title).
+    activityFormat: 'full',
     accountSort: 'arranged',
     eventLogging: 'hide',
     defaultClientMode: 'mitm',

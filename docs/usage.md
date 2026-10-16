@@ -63,6 +63,18 @@ proxy reaches for anything else unless asked. Press **g** → **Session titles**
 while the proxy runs. Set `sessionTitles.width` to change the columns the label gets. See
 [configuration](configuration.md).
 
+`activityFormat: "compact"` (**g** → **Activity format**) drops the method and the path, which is
+`POST /v1/messages?beta=true` on almost every row, and gives the title the room. A call other than messages
+keeps a short tag (`count` for count_tokens, else the last path segment), and a status other than 2xx shows
+as a red `✗ 429` before the duration. A `sessionTitles.width` left at 18 widens to 32 in compact rows; any
+other width stands. The default, `"full"`, is the row above.
+
+```
+ ⠋ 17:42:57  로그인 버그 고치기 그리고 OAuth   (claude-fable-5)  → bluejin  (0.0s...)
+   17:42:57  로그인 버그 고치기 그리고 OAuth   count (claude-opus-5)  → mimath0626  0.3s
+   17:42:57  로그인 버그 고치기 그리고 OAuth   (claude-opus-5)  → mimath0626 [pin]  ✗ 429 0.4s
+```
+
 Headless, you can re-sync accounts from the config without a restart by POSTing to the local control endpoint (the equivalent of pressing **R** in the TUI):
 
 ```bash

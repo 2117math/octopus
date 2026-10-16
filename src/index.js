@@ -638,6 +638,8 @@ async function serverCommand() {
     config.messageThreads = fleetThreads;
     // Read by the TUI on every frame, so a hand edit lands on the next reload.
     config.quotaBarPercent = diskConfig.quotaBarPercent === true;
+    // The activity row format, read per row the same way; 'full' unless 'compact'.
+    config.activityFormat = diskConfig.activityFormat === 'compact' ? 'compact' : 'full';
     // The same, for the per-account session rows; on unless set to false.
     config.sessionRows = diskConfig.sessionRows !== false;
     config.accountSort = ACCOUNT_SORTS.includes(diskConfig.accountSort) ? diskConfig.accountSort : 'arranged';
@@ -738,6 +740,7 @@ async function serverCommand() {
         // the edit never reached disk and was silently undone by the next start.
         if (config.eventLogging != null) diskConfig.eventLogging = config.eventLogging;
         if (config.quotaBarPercent != null) diskConfig.quotaBarPercent = config.quotaBarPercent;
+        if (config.activityFormat != null) diskConfig.activityFormat = config.activityFormat;
         if (config.sessionRows != null) diskConfig.sessionRows = config.sessionRows;
         if (config.rebalanceSessions != null) diskConfig.rebalanceSessions = config.rebalanceSessions;
         if (config.accountSort != null) diskConfig.accountSort = config.accountSort;
