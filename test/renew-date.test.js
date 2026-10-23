@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { nextRenewal, subscriptionText } from '../src/subscription.js';
+import { nextRenewal, nextRenewalOnDate, subscriptionText } from '../src/subscription.js';
 import { normalizeProfile } from '../src/oauth.js';
 import { AccountManager } from '../src/account-manager.js';
 import { Prober } from '../src/prober.js';
@@ -45,7 +45,7 @@ test('22일 기준: 10/24 에서 다음 갱신은 11/22, D-29', () => {
   assert.equal(kstDate(r.renewAt), '11/22');
   assert.equal(r.daysLeft, 29);
   assert.equal(r.renewAt, Date.parse('2026-11-22T02:55:22.574Z'));
-  assert.equal(subscriptionText({ createdAt: CREATED, status: 'active' }, now).text, '구독 11/22 D-29');
+  assert.equal(subscriptionText({ createdAt: CREATED, status: 'active' }, now).text, '구독 11/22 D-29 (추정)');
 });
 
 test('31일 기준: 30일 달·2월은 말일, 다음 달은 다시 31일', () => {
@@ -61,7 +61,7 @@ test('당일: 갱신 시각 전이면 D-day, 지나면 다음 달', () => {
   const before = nextRenewal(CREATED, Date.parse('2026-10-22T02:00:00Z'));
   assert.equal(kstDate(before.renewAt), '10/22');
   assert.equal(before.daysLeft, 0);
-  assert.equal(subscriptionText({ createdAt: CREATED, status: 'active' }, Date.parse('2026-10-22T02:00:00Z')).text, '구독 10/22 D-day');
+  assert.equal(subscriptionText({ createdAt: CREATED, status: 'active' }, Date.parse('2026-10-22T02:00:00Z')).text, '구독 10/22 D-day (추정)');
   const after = nextRenewal(CREATED, Date.parse('2026-10-22T03:00:00Z'));
   assert.equal(kstDate(after.renewAt), '11/22');
   assert.equal(after.daysLeft, 31);
@@ -75,10 +75,12 @@ test('D-n 은 KST 달력 날짜로 센다', () => {
 });
 
 test('경고 단계: D-4 보통, D-3 주황, D-day 빨강, 비활성 상태는 문구 그대로', () => {
-  const lv = iso => subscriptionText({ createdAt: CREATED, status: 'active' }, Date.parse(iso)).level;
+  // 경고색은 원장이 입력한 확정 날짜(renewDate)에만. 프로필 추정은 항상 0.
+  const lv = iso => subscriptionText({ createdAt: CREATED, renewDate: '2026-08-22', status: 'active' }, Date.parse(iso)).level;
   assert.equal(lv('2026-10-18T03:00:00Z'), 0);
   assert.equal(lv('2026-10-19T03:00:00Z'), 1);
   assert.equal(lv('2026-10-22T02:00:00Z'), 2);
+  assert.equal(subscriptionText({ createdAt: CREATED, status: 'active' }, Date.parse('2026-10-22T02:00:00Z')).level, 0, '추정은 경고색 없음');
   const c = subscriptionText({ createdAt: CREATED, status: 'canceled' }, Date.now());
   assert.equal(c.text, '구독 상태: canceled');
   assert.equal(c.level, 2);
@@ -128,7 +130,7 @@ test('/teamclaude/status 계정 객체의 subscription 필드', () => {
 });
 
 test('TUI 계정 줄과 move 화면 꼬리, 색 단계', () => {
-  const am = new AccountManager([oauth('a@x.com', { subscriptionCreatedAt: CREATED, subscriptionStatus: 'active' }), oauth('b@x.com')], 0.98);
+  const am = new AccountManager([oauth('a@x.com', { subscriptionCreatedAt: CREATED, subscriptionStatus: 'active', renewDate: '2026-08-22' }), oauth('b@x.com')], 0.98);
   const tui = makeTUI(am);
   atTime('2026-10-24T03:00:00Z', () => {
     assert.ok(plain(row(tui, 0)).endsWith(' · 구독 11/22 D-29'), '줄 맨 끝에 붙는다');
@@ -150,7 +152,7 @@ test('TUI 계정 줄과 move 화면 꼬리, 색 단계', () => {
     tui._renderMove(lines, 120, 28);
     const a = lines.map(plain).find(l => l.includes('a@x.com') && l.includes('5h'));
     const b = lines.map(plain).find(l => l.includes('b@x.com') && l.includes('5h'));
-    assert.match(a, /5h.*· 구독 11\/22 D-29/);
+    assert.match(a, /5h.*· 구독 11\/22 D-29$/);
     assert.ok(!b.includes('구독'));
   });
 });
@@ -159,7 +161,7 @@ test('attach 모드 TUI 도 status 의 subscription 으로 같은 꼬리를 그�
   const am = new RemoteAccountManager();
   am.applyStatus({ accounts: [{ name: 'a@x.com', type: 'oauth', quota: {}, subscription: { createdAt: CREATED, status: 'active', renewAt: 1, daysLeft: 1 } }] });
   const tui = makeTUI(am);
-  assert.match(plain(row(tui, 0)), /· 구독 \d+\/\d+ D-(\d+|day)$/);
+  assert.match(plain(row(tui, 0)), /· 구독 \d+\/\d+ D-(\d+|day)( \(추정\))?$/);
 });
 
 test('대시보드 페이지가 구독 줄 헬퍼를 싣는다', () => {

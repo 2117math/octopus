@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import { UNAVAILABLE_TEXT, RESET_CREDIT_MAX_AGE_MS, outsideSpendText, forecastText, showSessionRow } from './status-renderer.js';
 import { USAGE_WINDOWS } from './client-usage.js';
-import { nextRenewal, subscriptionText } from './subscription.js';
+import { nextRenewal, nextRenewalOnDate, subscriptionText } from './subscription.js';
 
 export function renderDashboardHtml() {
   return PAGE;
@@ -727,7 +727,7 @@ export const CARD_NOTE_MAX_AGE_MS = 60 * 1000;
 const SHARED_HELPERS = [
   scopedWeeklyRows, accountTokens, modelLabel, recentModelLabels, providerLabel, thresholdBadgeText, accountBadges, sessionRows, filterSessionRows, sortRows, uniqSorted,
   switchRequest, switchOutcome, accountControlRequest, accountControlOutcome, thresholdRequest, thresholdPercentText, thresholdOutcome, routeRows, problems, usageFor,
-  outsideSpendText, forecastText, showSessionRow, nextRenewal, subscriptionText, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
+  outsideSpendText, forecastText, showSessionRow, nextRenewal, nextRenewalOnDate, subscriptionText, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
 ].map(fn => fn.toString()).join('\n\n');
 
 // The constants ride along: `problems` closes over the thresholds and

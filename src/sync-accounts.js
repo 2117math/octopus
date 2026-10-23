@@ -5,6 +5,7 @@ import { removedAccountIds, addedAccountIds, configIndexFor } from './account-pa
 import { ensureAccountIds } from './account-id.js';
 import { accountSwitchThreshold, accountAllowsExtraUsage, accountRouting } from './account-manager.js';
 import { localListener } from './upstream-proxy.js';
+import { nextRenewalOnDate } from './subscription.js';
 
 /**
  * Sync accounts from disk config: add new accounts and refresh credentials
@@ -115,6 +116,8 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
     // honour a budget defeats the budget.
     mgr.maxUsage = diskAcct.maxUsage ?? null;
     mgr.maxSpend = diskAcct.maxSpend ?? null;
+    // 실제 결제일(renewDate): 디스크 편집·`octopus renew` 가 재시작 없이 바로 반영된다. 형식이 틀리면 지운다.
+    mgr.renewDate = nextRenewalOnDate(diskAcct.renewDate) ? diskAcct.renewDate : null;
     // Same for a per-account switch threshold (#409): thresholdFor() reads it
     // straight off the account, so a disk edit takes effect on the very next
     // selection without a restart, exactly like the fleet-wide setting does.
@@ -175,6 +178,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
       if (diskAcct.messageThreads === true) cfgAcct.messageThreads = true; else delete cfgAcct.messageThreads;
       if (diskAcct.maxUsage != null) cfgAcct.maxUsage = diskAcct.maxUsage; else delete cfgAcct.maxUsage;
       if (diskAcct.maxSpend != null) cfgAcct.maxSpend = diskAcct.maxSpend; else delete cfgAcct.maxSpend;
+      if (diskAcct.renewDate) cfgAcct.renewDate = diskAcct.renewDate; else delete cfgAcct.renewDate;
       if (diskAcct.switchThreshold != null) cfgAcct.switchThreshold = diskAcct.switchThreshold; else delete cfgAcct.switchThreshold;
       if (diskAcct.routing) cfgAcct.routing = diskAcct.routing; else delete cfgAcct.routing;
       if (diskAcct.priority != null) cfgAcct.priority = diskAcct.priority; else delete cfgAcct.priority;

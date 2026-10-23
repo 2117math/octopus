@@ -15,7 +15,7 @@ import { safeLine } from './safe-text.js';
 import { parseRoutingUrl, describeRouting, routingToUrl, isRoutingFailure } from './account-routing.js';
 import { isSelfProxy } from './upstream-proxy.js';
 import { envVar } from './brand.js';
-import { nextRenewal } from './subscription.js';
+import { nextRenewal, nextRenewalOnDate } from './subscription.js';
 /** @typedef {import('./session-tracker.js').Observation} Observation */
 
 // Re-exported for callers that import these model helpers from here.
@@ -377,6 +377,8 @@ function makeAccount(acct, index, listener = null) {
     subscriptionCreatedAt: acct.subscriptionCreatedAt || null,
     subscriptionStatus: acct.subscriptionStatus || null,
     billingType: acct.billingType || null,
+    // [local patch 2026-10-24 원장] 원장이 알려 준 실제 결제일(YYYY-MM-DD). 프로필 계산값보다 우선.
+    renewDate: nextRenewalOnDate(acct.renewDate) ? acct.renewDate : null,
     priority: acct.priority || 0,
     // Where this account sits in the list the TUI draws, arranged by the
     // operator from the settings screen. Presentation only: nothing but
@@ -5014,11 +5016,14 @@ export class AccountManager {
    * 프로필(subscription_created_at)을 받은 적 없으면 null.
    */
   subscriptionStatus(account, now = Date.now()) {
-    if (!account?.subscriptionCreatedAt) return null;
-    const r = nextRenewal(account.subscriptionCreatedAt, now);
+    const manual = account?.renewDate ? nextRenewalOnDate(account.renewDate, now) : null;
+    if (!account?.subscriptionCreatedAt && !manual) return null;
+    const r = manual || nextRenewal(account.subscriptionCreatedAt, now);
     return {
-      createdAt: account.subscriptionCreatedAt,
+      createdAt: account.subscriptionCreatedAt || null,
       status: account.subscriptionStatus || null,
+      renewDate: manual ? account.renewDate : null,
+      source: manual ? 'manual' : 'estimate',
       renewAt: r ? r.renewAt : null,
       daysLeft: r ? r.daysLeft : null,
     };

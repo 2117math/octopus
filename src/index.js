@@ -26,6 +26,7 @@ import { loginCodex, startCodexLogin } from './codex-auth.js';
 import { isRemoteSession, openBrowser, PANEL_LOGIN_TIMEOUT_MS } from './login-flow.js';
 import { providerOf } from './provider.js';
 import { syncAccountsFromDisk } from './sync-accounts.js';
+import { nextRenewalOnDate } from './subscription.js';
 import { mergeAccountsForSave, syncRefreshedTokens, removedAccountIds, clearRemovedAccountIds, clearAddedAccountIds, markAccountRemoved, configIndexFor } from './account-pairing.js';
 import { ensureAccountIds } from './account-id.js';
 import * as alias from './alias.js';
@@ -237,6 +238,10 @@ switch (command) {
     break;
   case 'priority':
     await priorityCommand();
+    process.exit(0);
+    break;
+  case 'renew':
+    await renewCommand();
     process.exit(0);
     break;
   case 'rename':
@@ -2919,6 +2924,46 @@ async function priorityCommand() {
   account.priority = priority;
   await saveConfig(config);
   console.log(`Set priority of "${account.name}" to ${priority} (lower = preferred)`);
+  await notifyRunningServer(config);
+}
+
+// ── renew ───────────────────────────────────────────────────
+
+// [local patch 2026-10-24 원장] 실제 결제일 수동 입력. 프로필의 created_at 은 요금제를
+// 바꾼 계정의 결제 주기와 다를 수 있어, 한 번의 실제 갱신일을 적어 두면 그 '일'로 매달 센다.
+async function renewCommand() {
+  const config = await loadOrCreateConfig();
+  const name = args[1];
+  const value = args[2];
+
+  if (!name || !value) {
+    console.error('Usage: octopus renew <account-name|email|number> <YYYY-MM-DD>   (a real renewal date, past or future)');
+    console.error('       octopus renew <account-name|email|number> clear');
+    console.error('The number is the 1-based position in the config file. The day of the month repeats every month.');
+    process.exit(1);
+  }
+
+  let account = resolveAccount(config.accounts, name, argValue('--org'));
+  if (!account && /^\d+$/.test(name)) account = config.accounts[Number(name) - 1] || null;
+  if (!account) {
+    console.error(`Account "${name}" not found`);
+    process.exit(1);
+  }
+
+  if (value === 'clear') {
+    delete account.renewDate;
+    await saveConfig(config);
+    console.log(`Cleared the renewal date of "${account.name}" (the profile estimate is shown again).`);
+  } else {
+    if (!nextRenewalOnDate(value)) {
+      console.error(`"${value}" is not a date — use YYYY-MM-DD, e.g. 2026-10-27`);
+      process.exit(1);
+    }
+    account.renewDate = value;
+    await saveConfig(config);
+    const r = nextRenewalOnDate(value);
+    console.log(`Set the renewal date of "${account.name}" to ${value} (next renewal in ${r?.daysLeft} days).`);
+  }
   await notifyRunningServer(config);
 }
 

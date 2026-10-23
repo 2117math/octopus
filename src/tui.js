@@ -4104,7 +4104,7 @@ export class TUI {
    * @param {boolean} [plain]  색 없이 글자만
    */
   _subscriptionTail(a, plain = false) {
-    const src = a?.subscription ?? (a?.subscriptionCreatedAt ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus } : null);
+    const src = a?.subscription ?? (a?.subscriptionCreatedAt || a?.renewDate ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus, renewDate: a.renewDate } : null);
     const t = subscriptionText(src);
     if (!t) return '';
     const body = ` · ${t.text}`;
