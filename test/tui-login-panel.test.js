@@ -355,7 +355,7 @@ test('login panel: a held ESC followed by anything but a marker is the Esc key, 
   handTimers(tui);
   openPanel(tui);
   tui._onData('\x1b');
-  tui._onData('x');
+  tui._onData('z');
   assert.equal(flow.signal.aborted, true);
   assert.equal(tui.mode, 'normal');
 });

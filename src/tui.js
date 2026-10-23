@@ -13,6 +13,7 @@ import { PROVIDERS, providerOf, isSubscriptionAccount, upstreamFor } from './pro
 import { mintAccountId } from './account-id.js';
 import { formatPercent, heldResetCredits, showSessionRow } from './status-renderer.js';
 import { subscriptionText } from './subscription.js';
+import { scanLeftovers, killLeftovers, summarizeLeftovers, formatGB } from './cleanup.js';
 import { resolveMaxUsage, resolveMaxSpendMinor, switchThresholdDiffs, modelLabel, EFFORT_SEP, weeklyBucketForModel, modelFamily } from './model.js';
 import { parseProxyUrl, proxyToUrl, describeProxy, describeSelfProxy, resolveUpstreamProxy, setUpstreamProxy, getUpstreamProxy, localListener, isSelfProxy } from './upstream-proxy.js';
 import { describeRouting, parseRoutingUrl, routingToUrl, checkRouting } from './account-routing.js';
@@ -549,8 +550,10 @@ const GIB = 1024 ** 3;
  * entries from the end first, then the compressed and free figures.
  * @param {any} snap a HostStats snapshot
  * @param {number} width
+ * @param {{ count?: number, memMB?: number }|null} [cleanup] 「[x] 정리」 안내: null 이면 안내 없음,
+ *   대상이 있으면 `[x] 정리 3개 0.4GB` 를 주황으로. 자리가 모자라면 안내만 먼저 빠진다.
  */
-export function formatHostLine(snap, width) {
+export function formatHostLine(snap, width, cleanup = null) {
   const total = snap?.totalBytes;
   const free = snap?.freeBytes;
   if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(free) || free < 0) return '';
@@ -578,7 +581,13 @@ export function formatHostLine(snap, width) {
   const tries = [];
   for (let n = procs.length; n >= 0; n--) tries.push(compose(n, true, true));
   tries.push(compose(0, false, true), compose(0, false, false));
-  return tries.find(line => vw(line) <= width - 1) || '';
+  const line = tries.find(l => vw(l) <= width - 1) || '';
+  if (!line || !cleanup) return line;
+  const n = Number(cleanup.count) || 0;
+  const hint = n > 0
+    ? `${dim('  ·  ')}${orange(`[x] 정리 ${n}개 ${formatGB(Number(cleanup.memMB) || 0)}`)}`
+    : dim('  ·  [x] 정리');
+  return vw(line) + vw(hint) <= width - 1 ? line + hint : line;
 }
 
 /** A pane's title, `w` columns wide: the label, then a rule to the pane's edge. */
@@ -889,6 +898,8 @@ export class TUI {
     // The Host line's sampler (host-stats.js). Absent, the line reads the
     // account manager's `host` (attach mode), or is not drawn.
     hostStats = null,
+    // 안 쓰는 작업 정리(`x`, cleanup.js). 프로세스 목록 조회·종료·플랫폼은 시험에서 바꿔 끼운다.
+    cleanupScan = scanLeftovers, cleanupKill = undefined, cleanupPlatform = process.platform,
     // Read for TMUX when the login panel copies its link. Injectable so the
     // tmux wrapping can be exercised without running inside tmux.
     env = /** @type {Record<string, string | undefined>} */ (process.env) }) {
@@ -906,6 +917,9 @@ export class TUI {
     /** @type {LoginAccount | null} */
     this.loginAccount = loginAccount; // (re-)login for a chosen account (may be null)
     this._env = env;
+    this._cleanupScan = cleanupScan;
+    this._cleanupKill = cleanupKill;
+    this._cleanupPlatform = cleanupPlatform;
     this.activityLogPath = activityLogPath;
     this._readCredentials = readCredentials;
     this._readProfile = readProfile;
@@ -926,6 +940,10 @@ export class TUI {
     this.selRoute = null;    // in switch mode: null = global default, else a getRoutes() entry to pin
     this.selReturn = 'normal'; // mode to fall back to when select mode closes
     this.move = null;        // the `m` picker while it is open (see _openMove)
+    this.cleanup = null;     // 「안 쓰는 작업 정리」 창 상태(see _openCleanup)
+    this._leftovers = null;  // 마지막 조회의 { count, memMB } — Host 줄 안내용
+    /** @type {ReturnType<typeof setInterval> | null} */
+    this._leftoverTimer = null;
     this.setIdx = 0;         // cursor row on the settings screen (BIOS-style nav)
     this.setScroll = 0;      // first body line the settings screen shows (see _viewport)
     this.blockIdx = 0;       // cursor row on the blocked-models editor
@@ -1035,6 +1053,7 @@ export class TUI {
     this._lastFrame = null;   // entering the alt screen always paints
     this.render();
     this._scheduleTick();
+    this._startLeftoverWatch();
   }
 
   /**
@@ -1099,6 +1118,7 @@ export class TUI {
     this.login = null;
     this.running = false;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+    if (this._leftoverTimer) { clearInterval(this._leftoverTimer); this._leftoverTimer = null; }
     // Written now rather than dropped: quitting inside the debounce window
     // would otherwise lose the last arrangement the operator saw on screen.
     this._flushOrderSave();
@@ -1414,6 +1434,7 @@ export class TUI {
       case 'blocklist': this._keyBlocklist(k); break;
       case 'login': this._keyLogin(k); break;
       case 'move': this._keyMove(k); break;
+      case 'cleanup': this._keyCleanup(k); break;
     }
     this.render();
   }
@@ -1435,6 +1456,7 @@ export class TUI {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
     else if (k === 'p' && this.am.accounts.length > 0) { this._doProbe(); }
+    else if (k === 'x' && this._cleanupAvailable()) { this._openCleanup(); }
     // Re-login: an OAuth account whose refresh token upstream has rejected stays
     // in 'error' until someone signs in again, and that someone is usually
     // looking at this screen. The cursor starts on the first account that needs
@@ -2881,6 +2903,8 @@ export class TUI {
       this._renderBlocklist(lines);
     } else if (view === 'move') {
       this._renderMove(lines, W, H - footerH);
+    } else if (view === 'cleanup') {
+      this._renderCleanup(lines, W);
     } else {
     // ── Accounts, or the login panel in their place. The activity pane stays
     // under the panel: the sign-in's own progress lines land there.
@@ -3334,6 +3358,108 @@ export class TUI {
 
   // ── session move (`m`) ─────────────────────────────
 
+  // ── 안 쓰는 작업 정리 (원장 2026-10-24, cleanup.js). Windows 의 이 PC 에서만: attach 모드의
+  // Host 줄은 서버 PC 것이라 여기서 끄면 엉뚱한 PC 를 정리하게 된다.
+  _cleanupAvailable() {
+    return this._cleanupPlatform === 'win32' && !this.remote;
+  }
+
+  /** Host 줄 샘플 주기(1분)마다 대상 수를 새로 센다. 첫 조회는 부팅 직후 부하를 피해 5초 뒤. */
+  _startLeftoverWatch() {
+    if (!this._cleanupAvailable() || this._leftoverTimer) return;
+    const tick = async () => {
+      if (this.config?.hostLine === false || this.mode === 'cleanup') return;
+      let items = null;
+      try { items = await this._cleanupScan(); } catch { items = null; }
+      if (items && this.running && this.mode !== 'cleanup') { this._leftovers = summarizeLeftovers(items); this.render(); }
+    };
+    const first = setTimeout(tick, 5000);
+    first.unref?.();
+    this._leftoverTimer = setInterval(tick, 60_000);
+    this._leftoverTimer.unref?.();
+  }
+
+  _openCleanup() {
+    const st = { stage: 'scan', items: [] };
+    this.cleanup = st;
+    this.mode = 'cleanup';
+    this._cleanupScan().then(items => {
+      if (this.cleanup !== st || st.stage !== 'scan') return;
+      if (items) {
+        st.items = items;
+        this._leftovers = summarizeLeftovers(items);
+      }
+      st.stage = items == null ? 'error' : items.length ? 'list' : 'empty';
+      if (this.running) this.render();
+    }, () => {
+      if (this.cleanup !== st) return;
+      st.stage = 'error';
+      if (this.running) this.render();
+    });
+  }
+
+  _closeCleanup() {
+    this.cleanup = null;
+    this.mode = 'normal';
+  }
+
+  _keyCleanup(/** @type {string} */ k) {
+    const st = this.cleanup;
+    if (!st) { this.mode = 'normal'; return; }
+    if (st.stage === 'kill') return;
+    if (k === 'esc' || k === 'q') { this._closeCleanup(); return; }
+    if (k === 'y' && st.stage === 'list') this._doCleanup(st);
+  }
+
+  /** 끄기 직전에 목록을 한 번 더 받아, 창을 연 뒤에 끝났거나 pid 가 다른 프로그램에게 재사용된
+   *  것은 건드리지 않는다(같은 pid 라도 시작 시각이 같아야 한다). */
+  async _doCleanup(/** @type {any} */ st) {
+    st.stage = 'kill';
+    let targets = [];
+    let readFailed = false;
+    try {
+      const fresh = await this._cleanupScan();
+      if (fresh) targets = fresh.filter(f => st.items.some((/** @type {any} */ i) => i.pid === f.pid && i.startedAt === f.startedAt));
+      else readFailed = true;
+    } catch { readFailed = true; }
+    if (readFailed) {
+      this._addLog('정리: 프로세스 목록을 읽지 못해 아무것도 끄지 않았습니다');
+    } else if (targets.length) {
+      const r = killLeftovers(targets, this._cleanupKill ? { kill: this._cleanupKill } : undefined);
+      this._addLog(`${r.killed}개 껐습니다 · 메모리 ${formatGB(r.memMB)} 확보${r.failed ? ` · ${r.failed}개 실패` : ''}`);
+    } else {
+      this._addLog('정리할 작업이 없습니다');
+    }
+    this._leftovers = null;
+    if (this.cleanup === st) this._closeCleanup();
+    if (this.running) this.render();
+  }
+
+  _renderCleanup(/** @type {string[]} */ lines, /** @type {number} */ W) {
+    const st = this.cleanup;
+    if (!st) return;
+    lines.push('');
+    lines.push(bold('  안 쓰는 작업 정리') + dim('  — 화면 없는 테스트 브라우저·주인 없는 검색·남은 테스트 서버·멈춘 검사 스크립트'));
+    lines.push('');
+    if (st.stage === 'scan' || st.stage === 'kill') { lines.push(gray(st.stage === 'scan' ? '    찾는 중…' : '    끄는 중…')); return; }
+    if (st.stage === 'error') { lines.push(yellow('    프로세스 목록을 읽지 못했습니다. Esc 로 닫고 다시 시도하세요.')); return; }
+    if (st.stage === 'empty') { lines.push(green('    정리할 작업이 없습니다')); return; }
+    const sum = summarizeLeftovers(st.items);
+    lines.push(`  ${orange(`${sum.count}개 · 메모리 ${formatGB(sum.memMB)}`)}`);
+    lines.push('');
+    const kindW = Math.max(...st.items.map((/** @type {any} */ i) => vw(i.kind)));
+    const stamp = (/** @type {number} */ ms) => {
+      if (!(ms > 0)) return '--/-- --:--';
+      const d = new Date(ms);
+      const z = (/** @type {number} */ n) => String(n).padStart(2, '0');
+      return `${z(d.getMonth() + 1)}/${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}`;
+    };
+    for (const it of st.items) {
+      const head = `    ${rpad(it.kind, kindW)}  ${stamp(it.startedAt)}  ${rpad(`${it.memMB}MB`, 7)}  `;
+      lines.push(truncate(head + dim(safeLine(it.cmd, 200)), W - 1));
+    }
+  }
+
   /** Open the session picker: every known session, newest first, as it stood
    *  when the key was pressed, so the cursor does not chase a list reordering
    *  under it with every request. */
@@ -3728,7 +3854,7 @@ export class TUI {
     if (this.config?.hostLine === false) return '';
     let snap = null;
     try { snap = this.hostStats ? this.hostStats.snapshot() : (this.am.host ?? null); } catch { snap = null; }
-    return formatHostLine(snap, W);
+    return formatHostLine(snap, W, this._cleanupAvailable() ? (this._leftovers ?? {}) : null);
   }
 
   _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null } = {}) {
@@ -4437,7 +4563,11 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('s')}witch  ${bold('m')}ove  ${bold('R')}eload  ${bold('q')}uit`
-          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${this._cleanupAvailable() ? `${bold('x')} 정리  ` : ''}${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+      case 'cleanup':
+        return this.cleanup?.stage === 'list'
+          ? ` ${bold('y')} 모두 끄기  ${bold('Esc')} 닫기`
+          : this.cleanup?.stage === 'kill' ? ' 끄는 중…' : ` ${bold('Esc')} 닫기`;
       case 'move':
         return this.move?.stage === 'account'
           ? ` ${dim('↑↓')} select  ${bold('Enter')} move here  ${bold('Esc')} cancel`
