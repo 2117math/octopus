@@ -1996,11 +1996,12 @@ export class AccountManager {
 
   /** Best-available biased toward the fewest active sessions, so new sessions
    * spread across equal-priority accounts instead of funnelling onto one. Order:
-   * priority → [top pressure band, when expiry routing is on] → finalDay (weekly
-   * reset within 24h and not nearly spent) → hot5h (5h window at 80%+) → weekly
-   * used in 2-point steps [local patch 2] → fewest known sessions → fewest active
-   * sessions → fewest in-flight → highest expiry pressure (inert when expiry
-   * routing is off) → soonest weekly reset (the existing tiebreak). */
+   * priority → [top pressure band, when expiry routing is on] → reserve [local
+   * patch 2] (weekly reset within 24h and under 98% → 0 · 87%+ and reset beyond
+   * 24h → 2, held back · else 1) → hot5h (5h window at 80%+) → full (2+ sessions
+   * already seated) → weekly tier (<40% / <60% / rest) → seated session count →
+   * weekly used (exact) → fewest in-flight → highest expiry pressure (inert when
+   * expiry routing is off) → soonest weekly reset (the existing tiebreak). */
   _pickLeastLoadedEven(exclude = null, model = null, advisorModel = null) {
     const now = Date.now();
     const candidates = this._bandedCandidates(exclude, model, advisorModel);
@@ -2016,28 +2017,30 @@ export class AccountManager {
     candidates.forEach((account, i) => {
       const priority = account.priority || 0;
       const heldOff = spent[i];
-      // [local patch 2026-10-23 원장] 주간 균형. 원장 요구: Octopus 는 주간
-      // 사용량을 맞춰 써야 5시간 한도를 최대한 피한다 · 주간 리셋이 하루 남은
-      // 계정이 아니면 한 계정에 몰아 두지 마라. 그래서 "붙은 세션 수"(known)를
-      // 주간 사용률 뒤로 내렸다 — 앞에 두면 주간 57% 계정(세션 13)보다 주간
-      // 71% 계정(세션 0)이 먼저 뽑혀 주간이 벌어진다.
-      //  finalDay: governing weekly 창이 24시간 안에 리셋되고 95% 미만이면 0 —
-      //    리셋 전에 남은 몫을 먼저 쓰는 유일한 "몰아 쓰기" 예외.
-      //  hot5h: 5시간 창이 알려져 있고 80% 이상이면 1 — 다른 후보가 있으면 피한다
-      //    (5h 가 null 인 계정은 0).
-      //  used: 주간 사용률을 2%p 칸으로 내림 — 같은 칸이면 아래 키가 가른다.
-      //    모름(-Infinity)은 그대로 맨 앞: 써 봐야 한도를 알게 된다.
-      //  이어서 known(그 계정에 붙은 알려진 세션 수) → active sessions → inFlight.
-      const finalDay = this._finalDayRank(account, model, now);
+      // [local patch 2026-10-23 원장, 2차] 주간 균형 + 계정당 2세션. 요구: 주간
+      // 사용량을 맞춰 써야 5시간 한도를 피한다 · 한 계정에 두 개까지, 어쩔 수 없을
+      // 때만 세 개째 · 주간 40/60/87% 구간 · 87% 이상은 아껴 뒀다가 마지막에
+      // (남은 13% 는 5시간 한 번이면 끝난다). 1차에서는 주간 사용률(2%p 칸)이
+      // 세션 수보다 앞이라 가장 낮은 계정에 새 세션이 전부 몰렸다.
+      //  reserve: 0 = 주간 리셋 24시간 안·98% 미만(리셋 전 마무리 — 87% 이상이어도
+      //    먼저 쓴다) · 2 = 87% 이상이고 리셋이 24시간 밖(아껴 둠) · 1 = 그 밖.
+      //  hot5h: 5시간 창이 알려져 있고 80% 이상이면 1 (5h 모름 = 0).
+      //  full: 붙어 있는 세션이 이미 2개 이상이면 1 — 같은 reserve·hot5h 안에서는
+      //    세션이 2개 미만인 계정을 먼저.
+      //  tier: 주간 40% 미만 0 · 60% 미만 1 · 그 밖 2 (모름 0).
+      //  sessions: 붙어 있는 세션 수(knownCountFor — 쉬는 중인 세션 포함, 클라이언트
+      //    세션 단위). activeCountFor 는 2분 안에 움직인 세션만 세므로 쓰지 않는다.
+      //  used: 주간 사용률 그대로(양자화 없음, 모름은 맨 앞).
+      const reserve = this._reserveRank(account, model, now);
       const hot5h = this._hot5hRank(account);
-      const rawUsed = this._rankedWeeklyUsed(account, model);
-      const used = Number.isFinite(rawUsed) ? Math.floor(rawUsed * 50 + 1e-9) / 50 : rawUsed;
-      const known = this.sessionTracker.knownCountFor(account.index, now);
-      const sessions = this.sessionTracker.activeCountFor(account.index, now);
+      const sessions = this.sessionTracker.knownCountFor(account.index, now);
+      const full = sessions >= 2 ? 1 : 0;
+      const tier = this._tierRank(account, model);
+      const used = this._rankedWeeklyUsed(account, model);
       const inFlight = account.inFlight || 0;
       const pressure = pressures[i];
       const reset = this._rankedReset(account, model);
-      const key = [priority, heldOff, finalDay, hot5h, used, known, sessions, inFlight, pressure, reset];
+      const key = [priority, heldOff, reserve, hot5h, full, tier, sessions, used, inFlight, pressure, reset];
       // Lexicographic: the first differing key decides, a full tie keeps the
       // earlier candidate.
       let less = bestKey === null;
@@ -2054,15 +2057,27 @@ export class AccountManager {
     return best;
   }
 
-  /** [local patch 2026-10-23 원장] 0 when the weekly window governing `model`
-   * resets within 24 hours and is under 95% spent, else 1. The one case where
-   * piling onto an account is wanted: its leftover quota is about to vanish. */
-  _finalDayRank(account, model, now) {
+  /** [local patch 2026-10-23 원장, 2차] Reserve rank of the weekly window
+   * governing `model`: 0 when it resets within 24 hours and is under 98% spent
+   * (its leftover is about to vanish, so spend it first — even past 87%); 2 when
+   * it is 87% or more spent with the reset beyond 24 hours (held back for last:
+   * the remaining 13% is one 5-hour window's work); else 1. */
+  _reserveRank(account, model, now) {
     const win = this._governingWindow(account, model);
-    if (!Number.isFinite(win.resetAt)) return 1;
-    const untilReset = win.resetAt - now;
-    return untilReset > 0 && untilReset <= 24 * 3600_000
-      && Number.isFinite(win.utilization) && win.utilization < 0.95 ? 0 : 1;
+    const used = this._governingWeekly(account, model);
+    if (!Number.isFinite(used)) return 1;
+    const untilReset = Number.isFinite(win.resetAt) ? win.resetAt - now : Infinity;
+    if (untilReset > 0 && untilReset <= 24 * 3600_000 && used < 0.98) return 0;
+    return used >= 0.87 ? 2 : 1;
+  }
+
+  /** [local patch 2026-10-23 원장, 2차] Weekly tier: under 40% is 0, under 60%
+   * is 1, the rest 2 (87%+ is already held back by _reserveRank). Unknown is 0:
+   * using it is how its limit becomes known. */
+  _tierRank(account, model) {
+    const used = this._governingWeekly(account, model);
+    if (!Number.isFinite(used) || used < 0.40) return 0;
+    return used < 0.60 ? 1 : 2;
   }
 
   /** [local patch 2026-10-23 원장] 1 when the 5-hour window is known and at 80%

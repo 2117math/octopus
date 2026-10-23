@@ -21,7 +21,8 @@ function mgr(names, opts = {}) {
   // [Octopus local patch] _pickLeastLoadedEven ranks least weekly used ahead of
   // sessions and pressure. These tests exercise the terms after it, so neutralize it.
   am._rankedWeeklyUsed = () => 0;
-  am._finalDayRank = () => 0; // [local patch 2] keep the final-day term out of these band/pressure fixtures
+  am._reserveRank = () => 1; // [local patch 2] keep the reserve/tier terms out of these band/pressure fixtures
+  am._tierRank = () => 0;
   return am;
 }
 

@@ -669,6 +669,8 @@ test('scenario: even mode is unchanged by the presence of adaptive', () => {
   // [Octopus local patch] least-weekly-used ranks ahead of sessions; neutralize
   // it here so the test still checks the session-spreading term it is about.
   am._rankedWeeklyUsed = () => 0;
+  am._reserveRank = () => 1; // [local patch 2] 87%+ 아껴 두기·주간 구간도 같은 이유로 고정
+  am._tierRank = () => 0;
   weekly(am, 0, 0.20);
   weekly(am, 1, 0.45);
   weekly(am, 2, 0.88);
