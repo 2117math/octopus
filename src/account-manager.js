@@ -1831,6 +1831,11 @@ export class AccountManager {
   _rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) {
     const rb = this.rebalance;
     if (!rb?.enabled || !this.distributeSessions) return null;
+    // [local patch 2026-10-23 원장] 한 번 배정된 세션은 그 계정의 5시간 사용량이
+    // 다 찰 때까지 바꾸지 않는다. 5시간 사용률이 알려져 있고 1 미만이면 아직 쓸 수
+    // 있는 계정이므로, 설정을 켜 둬도 옮기지 않는다(모르면 기존 동작 그대로).
+    const used5h = pinned.quota.unified5h;
+    if (Number.isFinite(used5h) && used5h < 1) return null;
     const idle = this.sessionTracker.idleFor(sessionId);
     if (!idle || idle.clientPinned || idle.idleMs < rb.idleSeconds * 1000) return null;
     const target = this._pickLeastLoadedEven(exclude, model, advisorModel);
@@ -1991,8 +1996,10 @@ export class AccountManager {
 
   /** Best-available biased toward the fewest active sessions, so new sessions
    * spread across equal-priority accounts instead of funnelling onto one. Order:
-   * priority → [top pressure band, when expiry routing is on] → least weekly
-   * used [local patch] → fewest active sessions → fewest in-flight → highest expiry pressure (inert when expiry
+   * priority → [top pressure band, when expiry routing is on] → finalDay (weekly
+   * reset within 24h and not nearly spent) → hot5h (5h window at 80%+) → weekly
+   * used in 2-point steps [local patch 2] → fewest known sessions → fewest active
+   * sessions → fewest in-flight → highest expiry pressure (inert when expiry
    * routing is off) → soonest weekly reset (the existing tiebreak). */
   _pickLeastLoadedEven(exclude = null, model = null, advisorModel = null) {
     const now = Date.now();
@@ -2005,56 +2012,64 @@ export class AccountManager {
     // override: an account the tree knows is nearly spent (see _belowBandFloor).
     const spent = this._belowBandFloor(candidates, model, now);
     let best = null;
-    let bestPriority = Infinity;
-    let bestSpent = Infinity;
-    let bestKnown = Infinity;
-    let bestUsed = Infinity;
-    let bestSessions = Infinity;
-    let bestInFlight = Infinity;
-    let bestPressure = Infinity;
-    let bestReset = Infinity;
+    let bestKey = null;
     candidates.forEach((account, i) => {
       const priority = account.priority || 0;
       const heldOff = spent[i];
-      // [local patch] Spread first, then least-used. A new session goes to an
-      // account no known session (active or resting, within the known TTL) is
-      // pinned to while one exists; only when every account already carries a
-      // session do two share one. Among accounts carrying the same number, the
-      // weekly window that gates this model (family bucket or shared weekly,
-      // whichever is higher) decides, ascending, so the week is drained evenly.
-      // Unknown weekly sorts first, as a reset does: using the account is how
-      // its quota becomes known. Active sessions and in-flight requests break
-      // the remaining ties, as upstream's even mode did.
+      // [local patch 2026-10-23 원장] 주간 균형. 원장 요구: Octopus 는 주간
+      // 사용량을 맞춰 써야 5시간 한도를 최대한 피한다 · 주간 리셋이 하루 남은
+      // 계정이 아니면 한 계정에 몰아 두지 마라. 그래서 "붙은 세션 수"(known)를
+      // 주간 사용률 뒤로 내렸다 — 앞에 두면 주간 57% 계정(세션 13)보다 주간
+      // 71% 계정(세션 0)이 먼저 뽑혀 주간이 벌어진다.
+      //  finalDay: governing weekly 창이 24시간 안에 리셋되고 95% 미만이면 0 —
+      //    리셋 전에 남은 몫을 먼저 쓰는 유일한 "몰아 쓰기" 예외.
+      //  hot5h: 5시간 창이 알려져 있고 80% 이상이면 1 — 다른 후보가 있으면 피한다
+      //    (5h 가 null 인 계정은 0).
+      //  used: 주간 사용률을 2%p 칸으로 내림 — 같은 칸이면 아래 키가 가른다.
+      //    모름(-Infinity)은 그대로 맨 앞: 써 봐야 한도를 알게 된다.
+      //  이어서 known(그 계정에 붙은 알려진 세션 수) → active sessions → inFlight.
+      const finalDay = this._finalDayRank(account, model, now);
+      const hot5h = this._hot5hRank(account);
+      const rawUsed = this._rankedWeeklyUsed(account, model);
+      const used = Number.isFinite(rawUsed) ? Math.floor(rawUsed * 50 + 1e-9) / 50 : rawUsed;
       const known = this.sessionTracker.knownCountFor(account.index, now);
-      const used = this._rankedWeeklyUsed(account, model);
       const sessions = this.sessionTracker.activeCountFor(account.index, now);
       const inFlight = account.inFlight || 0;
       const pressure = pressures[i];
       const reset = this._rankedReset(account, model);
-      const samePriority = priority === bestPriority;
-      const sameSpend = samePriority && heldOff === bestSpent;
-      const sameKnown = sameSpend && known === bestKnown;
-      const sameUsed = sameKnown && used === bestUsed;
-      if (priority < bestPriority
-        || (samePriority && heldOff < bestSpent)
-        || (sameSpend && known < bestKnown)
-        || (sameKnown && used < bestUsed)
-        || (sameUsed && sessions < bestSessions)
-        || (sameUsed && sessions === bestSessions && inFlight < bestInFlight)
-        || (sameUsed && sessions === bestSessions && inFlight === bestInFlight && pressure < bestPressure)
-        || (sameUsed && sessions === bestSessions && inFlight === bestInFlight && pressure === bestPressure && reset < bestReset)) {
+      const key = [priority, heldOff, finalDay, hot5h, used, known, sessions, inFlight, pressure, reset];
+      // Lexicographic: the first differing key decides, a full tie keeps the
+      // earlier candidate.
+      let less = bestKey === null;
+      for (let k = 0; !less && bestKey !== null && k < key.length; k++) {
+        if (key[k] === bestKey[k]) continue;
+        less = key[k] < bestKey[k];
+        break;
+      }
+      if (less) {
         best = account;
-        bestPriority = priority;
-        bestSpent = heldOff;
-        bestKnown = known;
-        bestUsed = used;
-        bestSessions = sessions;
-        bestInFlight = inFlight;
-        bestPressure = pressure;
-        bestReset = reset;
+        bestKey = key;
       }
     });
     return best;
+  }
+
+  /** [local patch 2026-10-23 원장] 0 when the weekly window governing `model`
+   * resets within 24 hours and is under 95% spent, else 1. The one case where
+   * piling onto an account is wanted: its leftover quota is about to vanish. */
+  _finalDayRank(account, model, now) {
+    const win = this._governingWindow(account, model);
+    if (!Number.isFinite(win.resetAt)) return 1;
+    const untilReset = win.resetAt - now;
+    return untilReset > 0 && untilReset <= 24 * 3600_000
+      && Number.isFinite(win.utilization) && win.utilization < 0.95 ? 0 : 1;
+  }
+
+  /** [local patch 2026-10-23 원장] 1 when the 5-hour window is known and at 80%
+   * or more, else 0 (unknown 5h, as on Codex, is 0). */
+  _hot5hRank(account) {
+    const q5h = account.quota.unified5h;
+    return Number.isFinite(q5h) && q5h >= 0.80 ? 1 : 0;
   }
 
   /** [local patch] The governing weekly utilization as an ascending sort key

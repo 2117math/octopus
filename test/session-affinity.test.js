@@ -1,8 +1,8 @@
 // [local patch] Placement rules for Octopus's distribution mode:
-//   - spread first: a new client session takes an account no known session
-//     sits on while one exists, least-used weekly among those;
-//   - share only when unavoidable: once every account carries a session, the
-//     least-used one is shared;
+//   - weekly balance first (2026-10-23 원장): a new client session takes the
+//     account with the lowest weekly use, in 2-point steps; the number of
+//     sessions already seated only breaks a tie inside one step (see
+//     test/weekly-balance.test.js);
 //   - session affinity: a conversation with no pin of its own (a fresh
 //     subagent, a helper call) follows the account its client session already
 //     sits on, unless that account cannot serve it.
@@ -28,10 +28,16 @@ function fleet(weekly, opts = {}) {
 const seat = (am, key, idx) => { am.sessionTracker.touch(key, idx, 'unified7d'); };
 const place = (am, key, model = 'claude-sonnet-5-5') => am._selectForSession(key, null, model, null)?.name;
 
-test('spread first: a new session avoids an account another session already sits on', () => {
+test('weekly balance first: a seated account is still chosen while it is the least used', () => {
   const am = fleet([0.10, 0.30, 0.50]);
-  seat(am, 'A/aaa', 0);                       // acct0 is the least used, but taken
-  assert.equal(place(am, 'B/bbb'), 'acct1');  // least used among the free ones
+  seat(am, 'A/aaa', 0);                       // acct0 is the least used, and taken
+  assert.equal(place(am, 'B/bbb'), 'acct0');  // seats no longer outrank the weekly level
+});
+
+test('weekly balance first: seats break a tie inside one 2-point step', () => {
+  const am = fleet([0.300, 0.305, 0.50]);
+  seat(am, 'A/aaa', 0);
+  assert.equal(place(am, 'B/bbb'), 'acct1');  // same step as acct0, which is taken
 });
 
 test('a resting session still holds its seat (known, not merely active)', () => {
@@ -40,7 +46,7 @@ test('a resting session still holds its seat (known, not merely active)', () => 
   am.sessionTracker.touch('A/aaa', 0, 'unified7d', t0);
   assert.equal(am.sessionTracker.activeCountFor(0), 0);
   assert.equal(am.sessionTracker.knownCountFor(0), 1);
-  assert.equal(place(am, 'B/bbb'), 'acct1');
+  assert.equal(place(am, 'B/bbb'), 'acct0');  // known seats count only after the weekly level
 });
 
 test('share only when unavoidable: with every account seated, the least used is shared', () => {
@@ -54,7 +60,7 @@ test('one session fanning out counts as one seat, not one per conversation', () 
   seat(am, 'A/aaa', 1); seat(am, 'A/bbb', 1); seat(am, 'A/ccc', 1);
   seat(am, 'B/aaa', 0);
   assert.equal(am.sessionTracker.knownCountFor(1), 1);
-  assert.equal(place(am, 'C/ccc'), 'acct2');  // acct0 and acct1 each hold one session
+  assert.equal(place(am, 'C/ccc'), 'acct0');  // least used weekly, though it holds a session
 });
 
 test('session affinity: a conversation without a pin follows its session\'s seat', () => {

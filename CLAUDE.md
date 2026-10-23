@@ -13,10 +13,10 @@
 ## 원본과 다른 점
 1. 이름: package.json(name/bin/version 1.0.0), 로그 머리말 `[Octopus]`, TUI·대시보드 제목, CLI 사용법·도움말·README·docs의 보이는 문자열. README 맨 위에 포크 표기.
 2. 업데이터 무력화: `src/updater.js`의 `checkForUpdate()`와 `autoUpdate()`는 맨 앞에서 return. `octopus update`는 안내 한 줄만 출력. 관련 테스트 7개는 skip.
-3. 패치 1: `src/account-manager.js` `_pickLeastLoadedEven`에 "주간 사용률 낮은 계정 먼저" 항(`_rankedWeeklyUsed`)을 priority·heldOff 다음, sessions 앞에 추가.
+3. 패치 1(2026-10-23 원장 개정): `src/account-manager.js` `_pickLeastLoadedEven`(새 세션 배정). 원장 2026-10-23 요구 — ① Octopus 는 주간 사용량을 맞춰 써야 의미가 있다(그래야 5시간 한도를 피한다) ② 주간 리셋이 하루 남은 계정이 아니면 한 계정에 몰아 놓지 마라 ③ 한 번 배정된 세션은 그 계정의 5시간 사용량이 다 찰 때까지 바꾸지 마라. 정렬 키 순서(앞 키가 같을 때만 다음 키): priority → heldOff(`_belowBandFloor`) → **finalDay**(`_finalDayRank`: governing weekly 창이 24시간 안에 리셋되고 사용률 95% 미만이면 0, 아니면 1 — 몰아 쓰기의 유일한 예외) → **hot5h**(`_hot5hRank`: 5시간 창 사용률이 알려져 있고 80% 이상이면 1, 모르면 0) → **주간 사용률을 2%p 칸으로 내림**(`_rankedWeeklyUsed`, `Math.floor(u*50+1e-9)/50`, 모름은 맨 앞) → known 세션 수 → active 세션 → inFlight → pressure → reset. 예전(패치 1)에는 known 이 주간 사용률보다 앞이라 주간 57%·세션 13 계정보다 71%·세션 0 계정이 먼저 뽑혔다. 세션 고정(③): `_selectForSession` 은 pin 계정이 `_isAvailable` 인 동안 그대로 두고(해제 조건 = 5h/주간이 switchThreshold 이상·rate limit·disabled·upstream rejected·priority 더 높은 계정 등장·expiry preempt 켠 경우 리셋 롤오버), `_rebalanceIdle` 은 pin 계정의 5시간 사용률이 알려져 있고 1 미만이면 설정을 켜 둬도 옮기지 않는다.
 4. 패치 2: `src/warmer.js` `resolveClaudeCommand()` — Windows에서 `@anthropic-ai/claude-code/bin/claude.exe`가 형제 폴더에 있으면 그 경로로 워밍업 실행.
 5. 색 규칙: `src/tui.js` `barColor`는 채움률만으로 색을 정한다(0-49 초록, 50-74 노랑, 75-89 주황, 90+ 빨강, 임계값 이상은 항상 빨강).
-6. 테스트: 위 변경에 맞춰 기대값을 고쳤다(tui-bar, terminal-title, updater skip, expiry-pressure/adaptive-distribution은 패치 1 항을 0으로 고정).
+6. 테스트: 위 변경에 맞춰 기대값을 고쳤다(tui-bar, terminal-title, updater skip, expiry-pressure/adaptive-distribution은 패치 1 항을 0으로 고정, expiry-pressure 는 개정으로 생긴 finalDay 도 0으로 고정, session-affinity 는 새 순서로 기대값 수정, 새 테스트 `test/weekly-balance.test.js`).
 7. 별칭: `octopus alias`는 `octopus`를 가리키고, 쉘 rc 표식 `# teamclaude alias`는 그대로다.
 
 ## 이름을 바꾸지 않은 것 (호환성)
