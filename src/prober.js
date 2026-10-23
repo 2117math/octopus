@@ -12,9 +12,6 @@ import { fetchBackendQuota, hasBackendQuota } from './backend-quota.js';
 import { providerOf } from './provider.js';
 import { fetchCodexUsage } from './codex-usage.js';
 
-// [local patch 2026-10-24 원장] 구독 갱신일(프로필) 재확인 간격.
-const SUBSCRIPTION_RECHECK_MS = 6 * 60 * 60 * 1000;
-
 // Node's timers take a 32-bit signed delay: anything above 2^31-1 ms is
 // coerced to 1 ms, so an interval large enough to mean "practically never"
 // would instead probe in a tight loop. The TUI and CLI accept any number of
@@ -28,7 +25,7 @@ function clampInterval(ms) {
 // Which accounts the probe reads, one rule per source. Exported so the status
 // payload a server builds before its Prober exists states the same answer the
 // Prober will (#512), instead of keeping a copy of the rule.
-const isAnthropicProbeTarget = (/** @type {any} */ account) => !!account && providerOf(account) === 'anthropic'
+export const isAnthropicProbeTarget = (/** @type {any} */ account) => !!account && providerOf(account) === 'anthropic'
   && account.type === 'oauth' && !!account.credential && !account.upstream;
 
 const isCodexProbeTarget = (/** @type {any} */ account) => !!account && providerOf(account) === 'codex'
@@ -188,11 +185,7 @@ export class Prober {
       this.am.applyUsageData(account.index, usage);
       const missingTier = !account.rateLimitTier && !account.seatTier
         && account.hasClaudeMax == null && account.hasClaudePro == null;
-      // [local patch 2026-10-24 원장] 월 구독 갱신일: 티어를 이미 아는 계정도
-      // 구독 정보가 없거나 6시간이 지났으면 프로필을 다시 읽는다(메모리 기준, 재시작 뒤 1회).
-      const subStale = !account.subscriptionCheckedAt || Date.now() - account.subscriptionCheckedAt > SUBSCRIPTION_RECHECK_MS;
-      if ((missingTier || subStale) && this.profileFn) {
-        account.subscriptionCheckedAt = Date.now();
+      if (missingTier && this.profileFn) {
         const profile = await this._withTimeout(this.profileFn(account.credential, account.routing ?? null));
         this.am.applyProfileData(account.index, profile);
       }

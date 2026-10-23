@@ -4,6 +4,7 @@ import { nextRenewal, subscriptionText } from '../src/subscription.js';
 import { normalizeProfile } from '../src/oauth.js';
 import { AccountManager } from '../src/account-manager.js';
 import { Prober } from '../src/prober.js';
+import { SubscriptionRefresher } from '../src/subscription-refresher.js';
 import { TUI } from '../src/tui.js';
 import { RemoteAccountManager } from '../src/tui-remote.js';
 import { renderDashboardHtml } from '../src/dashboard.js';
@@ -168,17 +169,84 @@ test('대시보드 페이지가 구독 줄 헬퍼를 싣는다', () => {
   assert.ok(html.includes('subscriptionText(a.subscription'));
 });
 
-test('프로버: 티어를 이미 아는 계정도 구독 정보가 없으면 프로필을 한 번 읽고, 6시간 안에는 다시 읽지 않는다', async () => {
+// ── 갱신기 (프로브와 무관) ──────────────────────────────────────
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const goodProfile = { subscriptionCreatedAt: CREATED, subscriptionStatus: 'active', billingType: 'stripe_subscription' };
+
+test('갱신기: 시작 직후 1회 읽고 구독 3필드를 저장, 6시간(간격) 뒤 다시 읽는다', async () => {
   const am = new AccountManager([oauth('a@x.com', { rateLimitTier: 'max_20x', hasClaudeMax: true })], 0.98);
   let calls = 0;
-  const profileFn = async () => { calls++; return { subscriptionCreatedAt: CREATED, subscriptionStatus: 'active' }; };
-  const prober = new Prober(am, { probeFn: async () => ({ unified5h: 0.1 }), profileFn, log: () => {} });
-  await prober.probeAccount(am.accounts[0]);
-  assert.equal(calls, 1);
+  const r = new SubscriptionRefresher(am, { profileFn: async () => { calls++; return goodProfile; }, startDelayMs: 5, intervalMs: 40, log: () => {} });
+  r.start();
+  try {
+    await sleep(25);
+    assert.equal(calls, 1, '시작 직후 1회');
+    assert.equal(am.accounts[0].subscriptionCreatedAt, CREATED);
+    assert.equal(am.accounts[0].subscriptionStatus, 'active');
+    assert.equal(am.accounts[0].billingType, 'stripe_subscription');
+    await sleep(70);
+    assert.ok(calls >= 2, '간격 뒤 재호출');
+  } finally { r.stop(); }
+  const after = calls;
+  await sleep(60);
+  assert.equal(calls, after, 'stop 뒤에는 더 읽지 않는다');
+});
+
+test('갱신기: codex·disabled·프로필 없는 계정 제외, 동시 2개까지', async () => {
+  const am = new AccountManager([
+    oauth('a@x.com'), oauth('b@x.com'), oauth('c@x.com'), oauth('d@x.com'),
+    oauth('cx@x.com', { provider: 'codex', accountId: 'acct-1' }),
+    oauth('off@x.com', { disabled: true }),
+  ], 0.98);
+  const seen = [];
+  let inFlight = 0, peak = 0;
+  const profileFn = async cred => {
+    seen.push(cred); inFlight++; peak = Math.max(peak, inFlight);
+    await sleep(15); inFlight--;
+    return goodProfile;
+  };
+  const r = new SubscriptionRefresher(am, { profileFn, log: () => {} });
+  await r.refreshAll();
+  assert.equal(seen.length, 4, 'codex 와 disabled 는 읽지 않는다');
+  assert.equal(peak, 2, '동시 2개');
+  assert.equal(am.accounts[4].subscriptionCreatedAt, null);
+  assert.equal(am.accounts[5].subscriptionCreatedAt, null);
   assert.equal(am.accounts[0].subscriptionCreatedAt, CREATED);
-  await prober.probeAccount(am.accounts[0]);
-  assert.equal(calls, 1, '6시간 안 재확인 없음');
-  am.accounts[0].subscriptionCheckedAt = Date.now() - 7 * HOUR;
-  await prober.probeAccount(am.accounts[0]);
+});
+
+test('갱신기: 실패·타임아웃·예외는 무해하고 로그 한 줄, 기존 값은 유지', async () => {
+  const am = new AccountManager([oauth('a@x.com', { subscriptionCreatedAt: CREATED }), oauth('b@x.com'), oauth('c@x.com'), oauth('d@x.com')], 0.98);
+  const logs = [];
+  const profileFn = async cred => {
+    if (cred.includes('b@x')) return { error: 'HTTP 500', status: 500 };
+    if (cred.includes('c@x')) throw new Error('boom');
+    if (cred.includes('d@x')) await sleep(200);
+    return goodProfile;
+  };
+  const r = new SubscriptionRefresher(am, { profileFn, timeoutMs: 20, log: l => logs.push(l) });
+  await r.refreshAll();
+  assert.equal(logs.length, 3, 'b·c·d 각 한 줄');
+  assert.equal(am.accounts[1].subscriptionCreatedAt, null);
+  assert.equal(am.accounts[0].subscriptionCreatedAt, CREATED, '성공 계정은 저장');
+});
+
+test('갱신기: 401 이면 토큰을 강제 갱신하고 한 번만 다시 읽는다', async () => {
+  const am = new AccountManager([oauth('a@x.com')], 0.98);
+  const forced = [];
+  am.ensureTokenFresh = async (i, force) => { forced.push(!!force); };
+  let calls = 0;
+  const r = new SubscriptionRefresher(am, { profileFn: async () => (++calls === 1 ? { error: 'HTTP 401', status: 401 } : goodProfile), log: () => {} });
+  await r.refreshAll();
   assert.equal(calls, 2);
+  assert.deepEqual(forced, [false, true]);
+  assert.equal(am.accounts[0].subscriptionCreatedAt, CREATED);
+});
+
+test('프로버는 티어를 아는 계정의 프로필을 다시 읽지 않는다(갱신기 하나로)', async () => {
+  const am = new AccountManager([oauth('a@x.com', { rateLimitTier: 'max_20x', hasClaudeMax: true })], 0.98);
+  let calls = 0;
+  const prober = new Prober(am, { probeFn: async () => ({ unified5h: 0.1 }), profileFn: async () => { calls++; return goodProfile; }, log: () => {} });
+  await prober.probeAccount(am.accounts[0]);
+  assert.equal(calls, 0);
 });

@@ -31,6 +31,7 @@ import { ensureAccountIds } from './account-id.js';
 import * as alias from './alias.js';
 import { ensureCerts, mitmHosts } from './mitm.js';
 import { Prober, probeApplicable } from './prober.js';
+import { SubscriptionRefresher } from './subscription-refresher.js';
 import { ResetCreditRedeemer } from './codex-reset-credits.js';
 import { ClaudeResetRedeemer } from './claude-resets.js';
 import { Warmer, warmApplicable } from './warmer.js';
@@ -530,6 +531,7 @@ async function serverCommand() {
 
   // Opt-in background quota probe (config.quotaProbeSeconds, default 0 = off).
   let prober = null;
+  let subscriptionRefresher = null;
   // Opt-in keep-warm scheduler (interval or persisted reset-target schedule).
   let warmer = null;
   const serverStartedAt = Date.now();
@@ -1030,6 +1032,9 @@ async function serverCommand() {
   // is already shared with the server created above.
   hooks.probeQuota = () => prober?.probeAll();
   prober.start();
+  // [local patch 2026-10-24 원장] 구독 갱신일: 프로브가 꺼져 있어도 프로필을 시작 직후 1회 + 6시간마다 읽는다.
+  subscriptionRefresher = new SubscriptionRefresher(accountManager, { profileFn: fetchProfile });
+  subscriptionRefresher.start();
   // A money cap (accounts[].maxSpend) is judged against the month-to-date
   // figure only the probe refreshes — a response carries none — so with the
   // probe off it binds only after a manual `p` refresh. Said once at start,
@@ -1075,6 +1080,7 @@ async function serverCommand() {
     stopTitle();
     if (!tui) console.log('\n[Octopus] Shutting down...');
     prober?.stop();
+    subscriptionRefresher?.stop();
     warmer?.stop();
     hostStats?.stop();
     credentialSync.stop();
