@@ -3379,6 +3379,13 @@ export class TUI {
     return gatingUtilization(a?.quota, weeklyBucketForModel(model));
   }
 
+  /** When the weekly window governing `model` on `a` resets (ms), or null. */
+  _moveWeeklyReset(/** @type {any} */ a, /** @type {string|null} */ model) {
+    if (typeof this.am._governingWeeklyReset === 'function') return this.am._governingWeeklyReset(a, model) || null;
+    const q = a?.quota;
+    return q?.[`${weeklyBucketForModel(model)}Reset`] || q?.unified7dReset || null;
+  }
+
   /** Whether `a` can take a session on `model`. The live manager answers with
    *  the selector's own predicate; an attached one has the server's
    *  model-agnostic reason plus the family bucket against its threshold. */
@@ -3412,6 +3419,7 @@ export class TUI {
         current: idx === s.account,
         ses: a?.quota?.unified5h ?? null,
         wk: weekly,
+        wkReset: this._moveWeeklyReset(a, s.model),
         rank,
       };
     });
@@ -3512,7 +3520,18 @@ export class TUI {
     mv.accounts.forEach((/** @type {any} */ r, /** @type {number} */ i) => {
       const cur = i === mv.aIdx && r.ok;
       const name = rpad(truncate(safeLine(this.am.accounts[r.idx]?.name ?? '?', 64), nameW), nameW);
-      const body = `${name}  Ses ${pctCell(r.ses)} · Wk ${pctCell(r.wk)}`;
+      // [local patch 2026-10-23 원장] 옮길 계정을 고르면서 계정별 5시간·주간
+      // 사용률을 본다. 5시간 80%↑·주간 90%↑ 는 막대와 같은 경고색(주황·빨강),
+      // 주간 리셋이 24시간 안이면 남은 시간을 꼬리로 붙인다.
+      const warn = (/** @type {number} */ v, /** @type {number} */ limit, /** @type {string} */ text) => {
+        if (!r.ok || !Number.isFinite(v) || v < limit) return text;
+        const colored = barColor(v) === BAR_RED ? red(text) : orange(text);
+        return cur ? `${colored}${BOLD}` : colored; // the cursor row stays bold past the colour reset
+      };
+      const cell = (/** @type {number} */ v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—').padStart(4);
+      const untilReset = Number.isFinite(r.wkReset) ? r.wkReset - Date.now() : NaN;
+      const tail = untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
+      const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}`;
       const shown = !r.ok ? dim(strike(body)) : cur ? bold(body) : body;
       lines.push(`   ${cur ? cyan('▸') : ' '} ${shown}${r.current ? dim('  (current)') : ''}`);
     });

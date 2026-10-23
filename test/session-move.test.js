@@ -329,7 +329,7 @@ test('m picks a session, preselects the least-used account, and moves it', () =>
   const lines = [];
   tui._renderMove(lines, 120, 28);
   const text = lines.map(plain).join('\n');
-  assert.match(text, /▸ c@x\.com\s+Ses\s+-\s+· Wk\s+20%/);
+  assert.match(text, /▸ c@x\.com\s+5h\s+—\s+· 주\s+20%$/m, 'unknown 5h is a dash, no reset tail when the week resets in 100h');
   assert.match(lines.map(l => l).join('\n'), /\x1b\[9m/, 'the disabled row is struck through');
 
   tui._key('enter');
@@ -341,6 +341,37 @@ test('m picks a session, preselects the least-used account, and moves it', () =>
   tui._key('esc');
   assert.equal(tui.mode, 'normal', 'Esc cancels');
   assert.equal(am.sessionTracker.pinnedAccount(SID, SHARED), 2);
+});
+
+test('move screen: 5h and weekly use per account, warning colours, reset tail inside 24h', () => {
+  const am = new AccountManager([oauth('a@x.com'), oauth('b@x.com'), oauth('c@x.com')], 0.99, { distributeSessions: true });
+  const rows = [
+    { h5: 0.24, wk: 0.91, reset: 17.5 * HOUR },   // hot week, resets soon
+    { h5: 0.85, wk: 0.40, reset: 100 * HOUR },    // hot 5h
+    { h5: 0.10, wk: 0.30, reset: 100 * HOUR },
+  ];
+  rows.forEach((r, i) => {
+    const q = am.accounts[i].quota;
+    q.unified5h = r.h5; q.unified5hReset = Date.now() + 2 * HOUR;
+    q.unified7d = r.wk; q.unified7dReset = Date.now() + r.reset;
+    am.accounts[i].probing = false;
+  });
+  am.beginSession(SID, { sessionId: SID, model: OPUS, clientPinned: false });
+  am.recordSession(SID, 2, OPUS);
+  am.endSession(SID);
+  const tui = makeTUI(am);
+  tui.render = () => {};
+  tui._key('m'); tui._key('enter');
+  const lines = [];
+  tui._renderMove(lines, 120, 28);
+  const row = name => lines.find(l => plain(l).includes(name) && plain(l).includes('5h'));
+  assert.match(plain(row('a@x.com')), /a@x\.com\s+5h\s+24% · 주\s+91% · 리셋 18h$/);
+  assert.match(plain(row('b@x.com')), /b@x\.com\s+5h\s+85% · 주\s+40%$/, 'no tail when the week resets in over 24h');
+  assert.match(plain(row('c@x.com')), /c@x\.com\s+5h\s+10% · 주\s+30%/);
+  assert.ok(row('b@x.com').includes('\x1b[38;5;208m 85%'), '5h at 85% is orange');
+  assert.ok(row('a@x.com').includes('\x1b[31m 91%'), 'weekly at 91% is red');
+  assert.ok(!row('c@x.com').includes('\x1b[31m') && !row('c@x.com').includes('38;5;208'), 'a cool row is uncoloured');
+  assert.ok(row('a@x.com').includes('5h  24% · 주'), '5h at 24% carries no colour code');
 });
 
 test('attach mode reads the server\'s session list and sends the move', async () => {

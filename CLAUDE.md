@@ -17,6 +17,7 @@
 4. 패치 2: `src/warmer.js` `resolveClaudeCommand()` — Windows에서 `@anthropic-ai/claude-code/bin/claude.exe`가 형제 폴더에 있으면 그 경로로 워밍업 실행.
 5. 색 규칙: `src/tui.js` `barColor`는 채움률만으로 색을 정한다(0-49 초록, 50-74 노랑, 75-89 주황, 90+ 빨강, 임계값 이상은 항상 빨강).
 6. 테스트: 위 변경에 맞춰 기대값을 고쳤다(tui-bar, terminal-title, updater skip, expiry-pressure/adaptive-distribution은 패치 1 항을 0으로 고정, expiry-pressure 는 개정으로 생긴 finalDay 도 0으로 고정, session-affinity 는 새 순서로 기대값 수정, 새 테스트 `test/weekly-balance.test.js`).
+8. move 화면(`src/tui.js` `_renderMove`, 원장 2026-10-23 「그거 보면서 옮기는 것」): 계정 줄마다 `5h 24% · 주 91%`(모르면 `—`, 주간 리셋이 24시간 안이면 `· 리셋 18h` 꼬리, 5h 80%↑·주 90%↑ 는 막대와 같은 주황/빨강). 대시보드 HTTP `/teamclaude/session-move` 는 계정 고르기 화면이 없는 API 라 해당 없음(attach 모드 TUI 는 같은 화면).
 7. 별칭: `octopus alias`는 `octopus`를 가리키고, 쉘 rc 표식 `# teamclaude alias`는 그대로다.
 
 ## 이름을 바꾸지 않은 것 (호환성)
