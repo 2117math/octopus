@@ -12,6 +12,7 @@ import { configIndexFor, managerAccountFor, markAccountRemoved, markAccountAdded
 import { PROVIDERS, providerOf, isSubscriptionAccount, upstreamFor } from './provider.js';
 import { mintAccountId } from './account-id.js';
 import { formatPercent, heldResetCredits, showSessionRow } from './status-renderer.js';
+import { subscriptionText } from './subscription.js';
 import { resolveMaxUsage, resolveMaxSpendMinor, switchThresholdDiffs, modelLabel, EFFORT_SEP, weeklyBucketForModel, modelFamily } from './model.js';
 import { parseProxyUrl, proxyToUrl, describeProxy, describeSelfProxy, resolveUpstreamProxy, setUpstreamProxy, getUpstreamProxy, localListener, isSelfProxy } from './upstream-proxy.js';
 import { describeRouting, parseRoutingUrl, routingToUrl, checkRouting } from './account-routing.js';
@@ -3531,7 +3532,10 @@ export class TUI {
       const cell = (/** @type {number} */ v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—').padStart(4);
       const untilReset = Number.isFinite(r.wkReset) ? r.wkReset - Date.now() : NaN;
       const tail = untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
-      const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}`;
+      // 구독 갱신일 (원장 2026-10-24). 못 가는 계정(취소선)은 색 없이, 커서 줄은 색 뒤 굵기를 되살린다.
+      const subRaw = this._subscriptionTail(this.am.accounts[r.idx], !r.ok);
+      const subTail = subRaw && r.ok && cur ? `${subRaw}${BOLD}` : subRaw;
+      const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}${subTail}`;
       const shown = !r.ok ? dim(strike(body)) : cur ? bold(body) : body;
       lines.push(`   ${cur ? cyan('▸') : ' '} ${shown}${r.current ? dim('  (current)') : ''}`);
     });
@@ -3960,7 +3964,26 @@ export class TUI {
     // leaves the machine, when the operator pinned it to its own proxy.
     const routeTag = routingTag(a);
     if (routeTag) line += `  ${cyan(routeTag)}`;
+    // [local patch 2026-10-24 원장] 월 구독 갱신일 — 맨 끝이라 줄이 모자라면 먼저 잘린다.
+    const subTag = this._subscriptionTail(a);
+    if (subTag) line += subTag;
     return line;
+  }
+
+  /**
+   * [local patch 2026-10-24 원장] ` · 구독 11/22 D-29` 꼬리(색 포함). 정보가 없으면 ''.
+   * 로컬은 계정의 subscriptionCreatedAt, attach 모드는 status 의 subscription 에서 읽는다.
+   * D-3 이하는 주황, D-day·비활성 상태는 빨강.
+   * @param {any} a
+   * @param {boolean} [plain]  색 없이 글자만
+   */
+  _subscriptionTail(a, plain = false) {
+    const src = a?.subscription ?? (a?.subscriptionCreatedAt ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus } : null);
+    const t = subscriptionText(src);
+    if (!t) return '';
+    const body = ` · ${t.text}`;
+    if (plain) return body;
+    return t.level >= 2 ? red(body) : t.level === 1 ? orange(body) : dim(body);
   }
 
   /** Whether the account behind this row is serving on extra usage. Asked of

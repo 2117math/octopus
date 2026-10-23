@@ -305,6 +305,10 @@ export function normalizeProfile(data) {
     seatTier: data.organization?.seat_tier,
     hasClaudeMax: data.account?.has_claude_max,
     hasClaudePro: data.account?.has_claude_pro,
+    // [local patch 2026-10-24 원장] 월 구독 갱신일 표시용 (src/subscription.js).
+    subscriptionCreatedAt: data.organization?.subscription_created_at,
+    subscriptionStatus: data.organization?.subscription_status,
+    billingType: data.organization?.billing_type,
   };
 }
 

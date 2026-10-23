@@ -15,6 +15,7 @@ import { safeLine } from './safe-text.js';
 import { parseRoutingUrl, describeRouting, routingToUrl, isRoutingFailure } from './account-routing.js';
 import { isSelfProxy } from './upstream-proxy.js';
 import { envVar } from './brand.js';
+import { nextRenewal } from './subscription.js';
 /** @typedef {import('./session-tracker.js').Observation} Observation */
 
 // Re-exported for callers that import these model helpers from here.
@@ -148,6 +149,9 @@ function resetTimestamp(value) {
 // Fallback when a per-bucket threshold table names neither the bucket nor a
 // `default` — the same value the single-number form has always used.
 export const DEFAULT_SWITCH_THRESHOLD = 0.98;
+
+// [local patch 2026-10-24 원장] OAuth 프로필에서 받아 상태 파일에 함께 보관하는 구독 필드.
+const SUBSCRIPTION_FIELDS = ['subscriptionCreatedAt', 'subscriptionStatus', 'billingType'];
 
 // Quota fields that survive a restart: utilization levels and their reset
 // windows, learned passively from upstream responses. Transient/derived state
@@ -369,6 +373,10 @@ function makeAccount(acct, index, listener = null) {
     seatTier: acct.seatTier || null,
     hasClaudeMax: acct.hasClaudeMax ?? null,
     hasClaudePro: acct.hasClaudePro ?? null,
+    // [local patch 2026-10-24 원장] 월 구독 갱신일 표시 (프로필 응답에서 학습, 상태 파일에 보관).
+    subscriptionCreatedAt: acct.subscriptionCreatedAt || null,
+    subscriptionStatus: acct.subscriptionStatus || null,
+    billingType: acct.billingType || null,
     priority: acct.priority || 0,
     // Where this account sits in the list the TUI draws, arranged by the
     // operator from the settings screen. Presentation only: nothing but
@@ -5001,11 +5009,26 @@ export class AccountManager {
     }
   }
 
+  /**
+   * [local patch 2026-10-24 원장] 계정의 월 구독 정보와 다음 갱신 시각.
+   * 프로필(subscription_created_at)을 받은 적 없으면 null.
+   */
+  subscriptionStatus(account, now = Date.now()) {
+    if (!account?.subscriptionCreatedAt) return null;
+    const r = nextRenewal(account.subscriptionCreatedAt, now);
+    return {
+      createdAt: account.subscriptionCreatedAt,
+      status: account.subscriptionStatus || null,
+      renewAt: r ? r.renewAt : null,
+      daysLeft: r ? r.daysLeft : null,
+    };
+  }
+
   /** Apply subscription metadata learned from the OAuth profile endpoint. */
   applyProfileData(accountIndex, profile) {
     const account = this.accounts[accountIndex];
     if (!account || !profile || profile.error) return;
-    for (const field of ['organizationType', 'rateLimitTier', 'seatTier', 'hasClaudeMax', 'hasClaudePro']) {
+    for (const field of ['organizationType', 'rateLimitTier', 'seatTier', 'hasClaudeMax', 'hasClaudePro', ...SUBSCRIPTION_FIELDS]) {
       if (profile[field] != null) account[field] = profile[field];
     }
   }
@@ -5409,6 +5432,9 @@ export class AccountManager {
         seatTier: a.seatTier,
         hasClaudeMax: a.hasClaudeMax,
         hasClaudePro: a.hasClaudePro,
+        subscriptionCreatedAt: a.subscriptionCreatedAt,
+        subscriptionStatus: a.subscriptionStatus,
+        billingType: a.billingType,
       };
       const adaptive = {
         burnRate: this.burnRateLearner.export(a.index),
@@ -5436,7 +5462,7 @@ export class AccountManager {
       for (const f of PERSISTED_QUOTA_FIELDS) {
         if (match.quota[f] != null) account.quota[f] = match.quota[f];
       }
-      for (const field of ['organizationType', 'rateLimitTier', 'seatTier', 'hasClaudeMax', 'hasClaudePro']) {
+      for (const field of ['organizationType', 'rateLimitTier', 'seatTier', 'hasClaudeMax', 'hasClaudePro', ...SUBSCRIPTION_FIELDS]) {
         if (match.profile?.[field] != null) account[field] = match.profile[field];
       }
       this.burnRateLearner.restore(account.index, match.adaptive?.burnRate);
@@ -5512,6 +5538,8 @@ export class AccountManager {
         type: a.type,
         provider: providerOf(a),
         orgName: a.orgName || null,
+        // [local patch 2026-10-24 원장] 월 구독 갱신일. 프로필 미수신·Codex 는 null.
+        subscription: this.subscriptionStatus(a),
         priority: a.priority || 0,
         // The attached TUI spreads these fields onto its own account objects
         // and sorts its rows by this one, so without it `teamclaude attach`

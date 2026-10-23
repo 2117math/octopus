@@ -17,6 +17,7 @@
 import { createHash } from 'node:crypto';
 import { UNAVAILABLE_TEXT, RESET_CREDIT_MAX_AGE_MS, outsideSpendText, forecastText, showSessionRow } from './status-renderer.js';
 import { USAGE_WINDOWS } from './client-usage.js';
+import { nextRenewal, subscriptionText } from './subscription.js';
 
 export function renderDashboardHtml() {
   return PAGE;
@@ -726,7 +727,7 @@ export const CARD_NOTE_MAX_AGE_MS = 60 * 1000;
 const SHARED_HELPERS = [
   scopedWeeklyRows, accountTokens, modelLabel, recentModelLabels, providerLabel, thresholdBadgeText, accountBadges, sessionRows, filterSessionRows, sortRows, uniqSorted,
   switchRequest, switchOutcome, accountControlRequest, accountControlOutcome, thresholdRequest, thresholdPercentText, thresholdOutcome, routeRows, problems, usageFor,
-  outsideSpendText, forecastText, showSessionRow, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
+  outsideSpendText, forecastText, showSessionRow, nextRenewal, subscriptionText, callerCan, callerNotice, cardNoteKey, cardNoteFor, backendQuotaRows,
 ].map(fn => fn.toString()).join('\n\n');
 
 // The constants ride along: `problems` closes over the thresholds and
@@ -1090,6 +1091,9 @@ ${SHARED_HELPERS}
     if (outside) card.appendChild(el('div', 'usage', 'outside: ' + outside));
     var forecast = forecastText(q.forecast, Date.now());
     if (forecast) card.appendChild(el('div', 'usage', 'forecast: ' + forecast));
+    // [local patch 2026-10-24 원장] 월 구독 갱신일 (프로필 미수신·Codex 는 줄 없음).
+    var subText = subscriptionText(a.subscription, Date.now());
+    if (subText) card.appendChild(el('div', 'usage', subText.text));
     var u = a.usage || {};
     var last = u.lastUsed ? ' · last ' + fmtAgo(u.lastUsed) : '';
     card.appendChild(el('div', 'usage', (u.totalRequests || 0) + ' req · ' + fmtNum(accountTokens(u)) + ' tok' + last));

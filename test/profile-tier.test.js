@@ -15,6 +15,7 @@ test('profile normalization retains the fields needed for quota weighting', () =
     organization: {
       uuid: 'org-1', name: 'Acme', organization_type: 'claude_team',
       rate_limit_tier: 'default_raven', seat_tier: 'team_standard',
+      subscription_created_at: '2026-08-22T02:55:22.574587Z', subscription_status: 'active', billing_type: 'stripe_subscription',
     },
   }), {
     accountUuid: 'account-1',
@@ -27,5 +28,9 @@ test('profile normalization retains the fields needed for quota weighting', () =
     seatTier: 'team_standard',
     hasClaudeMax: true,
     hasClaudePro: false,
+    // [local patch 2026-10-24 원장] 구독 갱신일 표시용 필드.
+    subscriptionCreatedAt: '2026-08-22T02:55:22.574587Z',
+    subscriptionStatus: 'active',
+    billingType: 'stripe_subscription',
   });
 });
