@@ -3670,7 +3670,7 @@ export class TUI {
   /** Draw one row against a layout from _listLayout. */
   _renderRow(/** @type {number} */ idx, /** @type {any} */ L, /** @type {Set<number>} */ current, /** @type {Map<number, any[]>|null} */ sessions = null) {
     const b = L.budgets.get(rowCategory(this.am.accounts[idx]));
-    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar, sessions: sessions?.get(idx) || null });
+    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar, sessions: sessions?.get(idx) || null, width: L.width });
   }
 
   /** The accounts of each provider present, in the order its rows are drawn. */
@@ -3857,7 +3857,7 @@ export class TUI {
     return formatHostLine(snap, W, this._cleanupAvailable() ? (this._leftovers ?? {}) : null);
   }
 
-  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null } = {}) {
+  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null, width = 0 } = {}) {
     const a = this.am.accounts[idx];
     const isCur = current.has(idx);
     const isSel = this.mode === 'select' && idx === this.selIdx;
@@ -4039,6 +4039,8 @@ export class TUI {
     const pctInBar = this.config?.quotaBarPercent === true;
 
     let line = ` ${sel}${cur} ${startSlot}${name} ${type}${status} ${l1} ${bar(r1, bw1, t1, w1, th1, pctInBar)}`;
+    /** 구독 꼬리가 모자랄 때 먼저 빼는 모델별 주간 칸(S7·F7, 뒤에서부터). */
+    const droppable = [];
     if (showBoth) {
       if (!weeklyFirst && !weeklyOnly) line += `  ${l2} ${bar(r2, bw, t2, w2, th2, pctInBar)}`;
       // A backend's monthly window has no unified slot; it draws its own bar
@@ -4049,11 +4051,15 @@ export class TUI {
       // Sonnet weekly bar — only shown when the usage probe has populated it. A
       // leading ► (in place of a padding space) marks a Sonnet route on this account.
       if (showFamily && q.unified7dSonnet != null) {
-        line += `${famLead('sonnet')}${familyMark('sonnet')}S7  ${bar(q.unified7dSonnet, bw, q.unified7dSonnetReset, SEVEN_DAY_MS, limFor('unified7dSonnet'), pctInBar)}`;
+        const seg = `${famLead('sonnet')}${familyMark('sonnet')}S7  ${bar(q.unified7dSonnet, bw, q.unified7dSonnetReset, SEVEN_DAY_MS, limFor('unified7dSonnet'), pctInBar)}`;
+        line += seg;
+        if (cursorAt !== 'sonnet') droppable.push(seg);
       }
       // Fable weekly bar — only shown when the usage probe has populated it.
       if (showFamily && q.unified7dFable != null) {
-        line += `${famLead('fable')}${familyMark('fable')}F7  ${bar(q.unified7dFable, bw, q.unified7dFableReset, SEVEN_DAY_MS, limFor('unified7dFable'), pctInBar)}`;
+        const seg = `${famLead('fable')}${familyMark('fable')}F7  ${bar(q.unified7dFable, bw, q.unified7dFableReset, SEVEN_DAY_MS, limFor('unified7dFable'), pctInBar)}`;
+        line += seg;
+        if (cursorAt !== 'fable') droppable.push(seg);
       }
     }
     // Explicit "disabled for these models" tag (issue #85): a family the account
@@ -4090,9 +4096,22 @@ export class TUI {
     // leaves the machine, when the operator pinned it to its own proxy.
     const routeTag = routingTag(a);
     if (routeTag) line += `  ${cyan(routeTag)}`;
-    // [local patch 2026-10-24 원장] 월 구독 갱신일 — 맨 끝이라 줄이 모자라면 먼저 잘린다.
+    // [local patch 2026-10-24 원장] 월 구독 갱신일 — 맨 끝.
+    // [local patch 2026-10-26 원장] 줄 너비(width)를 알면 글자 중간에서 잘리지 않게:
+    // 먼저 F7→S7 칸을 차례로 빼 보고, 그래도 안 들어가면 꼬리를 통째로 뺀다.
     const subTag = this._subscriptionTail(a);
-    if (subTag) line += subTag;
+    if (subTag) {
+      if (!(width > 0)) line += subTag;
+      else {
+        let cand = line;
+        for (;;) {
+          if (vw(cand) + vw(subTag) <= width) { line = cand + subTag; break; }
+          const seg = droppable.pop();
+          if (!seg) break;
+          cand = cand.replace(seg, '');
+        }
+      }
+    }
     return line;
   }
 
