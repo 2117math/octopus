@@ -279,8 +279,8 @@ test('the TUI blocked tag follows the gate, not the family bucket', () => {
   tui.mode = 'normal'; tui.selIdx = -1;
   const row = stripAnsi(tui._renderAcct(0, 8, true, am.getRoutes(), [], { fable: null, sonnet: null }));
   assert.equal(am._isAvailable(am.accounts[0], FABLE), false);
-  assert.match(row, /⊘ Fable/,
-    `routing refuses Fable on this account but the TUI shows no blocked tag: ${row}`);
+  // [2026-10-27 원장] ⊘ Fable 장식은 TUI 에서 뺐다 — 라우팅의 거절(위 assert)은 그대로.
+  assert.doesNotMatch(row, /⊘|✗/, `the Fable-spent decoration is gone: ${row}`);
 });
 
 test('the TUI blocked tag stays off when the account can still serve the family', () => {
