@@ -273,9 +273,9 @@ function drawnByProvider(/** @type {any} */ tui) {
   const realRow = tui._renderRow;
   const realPaint = tui._paint;
   try {
-    tui._renderRow = (/** @type {number} */ idx, /** @type {any} */ L, /** @type {any} */ current) => {
+    tui._renderRow = (/** @type {number} */ idx, /** @type {any} */ L, /** @type {any} */ current, /** @type {any[]} */ ...rest) => {
       drawn.push(idx);
-      return realRow.call(tui, idx, L, current);
+      return realRow.call(tui, idx, L, current, ...rest);
     };
     tui._paint = () => {};
     tui.running = true;

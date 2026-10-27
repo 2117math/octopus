@@ -480,6 +480,38 @@ export function blockedFamilies(quota, threshold) {
 }
 
 /**
+ * [local patch 2026-10-27 원장] 계정 줄들의 구독 꼬리를 같은 열에 맞춘다. `items` 는 줄마다
+ * { body: 꼬리 앞까지의 줄, droppable: 모자랄 때 먼저 빼는 칸(F7·S7, 뒤에서부터), tail: 꼬리(없으면 ''),
+ * width: 줄 너비(0 이면 제한 없음) }. 꼬리가 있는 줄 중 가장 긴 몸통이 열이 되고, 짧은 줄은 빈칸으로 채운다.
+ * 열 + 꼬리가 줄 너비를 넘으면 가장 긴 줄(들)에서 칸을 하나씩 빼 열을 줄이고, 뺄 칸이 없는 가장 긴 줄은
+ * 꼬리를 통째로 뺀다(반쪽 꼬리 없음 — 넘치는 줄의 꼬리만). 꼬리가 남은 줄들은 모두 같은 열이다.
+ * @param {{ body: string, droppable: string[], tail: string, width: number }[]} items
+ * @returns {string[]}
+ */
+export function alignSubTails(items) {
+  const cur = items.map(it => ({ ...it, droppable: [...it.droppable] }));
+  for (;;) {
+    const withTail = cur.filter(it => it.tail);
+    if (!withTail.length) break;
+    const col = Math.max(...withTail.map(it => vw(it.body)));
+    if (!withTail.some(it => it.width > 0 && col + vw(it.tail) > it.width)) break;
+    const widest = withTail.filter(it => vw(it.body) === col);
+    let dropped = false;
+    for (const it of widest) {
+      const seg = it.droppable.pop();
+      if (seg) { it.body = it.body.replace(seg, ''); dropped = true; }
+    }
+    if (!dropped) {
+      const over = (/** @type {any} */ it) => it.width > 0 && col + vw(it.tail) > it.width;
+      const hard = widest.filter(over);
+      for (const it of hard.length ? hard : withTail.filter(over)) it.tail = '';
+    }
+  }
+  const col = Math.max(0, ...cur.filter(it => it.tail).map(it => vw(it.body)));
+  return cur.map(it => (it.tail ? it.body + ' '.repeat(col - vw(it.body)) + it.tail : it.body));
+}
+
+/**
  * [local patch 2026-10-27 원장] TUI 에 그리는 「막힌 계열」 — Fable 은 뺀다(원장: 「어차피 100%라고
  * 써 있으면 된다」). F7 막대와 숫자는 그대로 두고 `⊘ Fable` 장식만 없앤다. 라우팅(blockedFamilies 를
  * 읽는 쪽)과 `octopus status` 텍스트는 건드리지 않는다.
@@ -2957,9 +2989,11 @@ export class TUI {
         const host = this._hostLine(W);
         if (host) lines.push(host);
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
+        const leftRows = this._renderRows(a.indices, split.left, current, sessionRows);
+        const rightRows = this._renderRows(b.indices, split.right, current, sessionRows);
         for (let r = 0; r < Math.max(a.indices.length, b.indices.length); r++) {
-          const left = r < a.indices.length ? this._renderRow(a.indices[r], split.left, current, sessionRows) : '';
-          const right = r < b.indices.length ? this._renderRow(b.indices[r], split.right, current, sessionRows) : '';
+          const left = r < a.indices.length ? leftRows[r] : '';
+          const right = r < b.indices.length ? rightRows[r] : '';
           lines.push(fitLine(left, split.leftW) + dim(PANE_GUTTER) + right);
         }
       } else {
@@ -2969,9 +3003,7 @@ export class TUI {
         if (host) lines.push(host);
         const order = this._displayOrder();
         const layout = this._listLayout(order, W);
-        for (const i of order) {
-          lines.push(this._renderRow(i, layout, current, sessionRows));
-        }
+        lines.push(...this._renderRows(order, layout, current, sessionRows));
       }
       // ── Sessions: one line per known session, on the main dashboard only.
       // Every such line is one fewer for the activity log below.
@@ -3484,6 +3516,12 @@ export class TUI {
     }
   }
 
+  /** 주간 리셋이 24시간 안이면 ` · 리셋 18h` 꼬리, 아니면 ''. (move·집중 창 공용) */
+  _resetTail(/** @type {number|null|undefined} */ wkReset) {
+    const untilReset = Number.isFinite(wkReset) ? /** @type {number} */ (wkReset) - Date.now() : NaN;
+    return untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
+  }
+
   /** [local patch 2026-10-27 원장] `f`: 집중 계정 고르기 창. 맨 위 「집중 끄기」 + 계정 줄(move 화면과 같은 5h·주 %·구독 꼬리). */
   _openFocus() {
     const cur = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
@@ -3551,6 +3589,7 @@ export class TUI {
     const accts = f.rows.filter((/** @type {any} */ r) => !r.off);
     const nameW = Math.min(32, Math.max(1, ...accts.map((/** @type {any} */ r) => vw(safeLine(r.name ?? '?', 64)))));
     const cell = (/** @type {number} */ v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—').padStart(4);
+    const resetW = Math.max(0, ...accts.map((/** @type {any} */ r) => vw(this._resetTail(r.wkReset))));
     f.rows.forEach((/** @type {any} */ r, /** @type {number} */ i) => {
       const cur = i === f.idx;
       const mark = cur ? cyan('▸') : ' ';
@@ -3563,9 +3602,9 @@ export class TUI {
         const colored = barColor(v) === BAR_RED ? red(text) : orange(text);
         return cur ? `${colored}${BOLD}` : colored;
       };
-      const untilReset = Number.isFinite(r.wkReset) ? r.wkReset - Date.now() : NaN;
-      const tail = untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
       const subRaw = this._subscriptionTail(this.am.accounts[r.idx]);
+      const reset = this._resetTail(r.wkReset);
+      const tail = subRaw ? reset + ' '.repeat(resetW - vw(reset)) : reset;
       const subTail = subRaw && cur ? `${subRaw}${BOLD}` : subRaw;
       const name = rpad(truncate(safeLine(r.name ?? '?', 64), nameW), nameW);
       const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}${subTail}`;
@@ -3758,6 +3797,8 @@ export class TUI {
     lines.push('');
     if (!mv.accounts.some((/** @type {any} */ r) => r.ok)) lines.push(yellow('    No account can take this session right now.'));
     const nameW = Math.min(32, Math.max(1, ...mv.accounts.map((/** @type {any} */ r) => vw(safeLine(this.am.accounts[r.idx]?.name ?? '?', 64)))));
+    // [local patch 2026-10-27 원장] 구독 꼬리가 모든 줄에서 같은 열에서 시작하도록 「리셋 Nh」 자리를 맞춘다.
+    const resetW = Math.max(0, ...mv.accounts.map((/** @type {any} */ r) => vw(this._resetTail(r.wkReset))));
     mv.accounts.forEach((/** @type {any} */ r, /** @type {number} */ i) => {
       const cur = i === mv.aIdx && r.ok;
       const name = rpad(truncate(safeLine(this.am.accounts[r.idx]?.name ?? '?', 64), nameW), nameW);
@@ -3770,10 +3811,10 @@ export class TUI {
         return cur ? `${colored}${BOLD}` : colored; // the cursor row stays bold past the colour reset
       };
       const cell = (/** @type {number} */ v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—').padStart(4);
-      const untilReset = Number.isFinite(r.wkReset) ? r.wkReset - Date.now() : NaN;
-      const tail = untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
-      // 구독 갱신일 (원장 2026-10-24). 못 가는 계정(취소선)은 색 없이, 커서 줄은 색 뒤 굵기를 되살린다.
       const subRaw = this._subscriptionTail(this.am.accounts[r.idx], !r.ok);
+      const reset = this._resetTail(r.wkReset);
+      const tail = subRaw ? reset + ' '.repeat(resetW - vw(reset)) : reset;
+      // 구독 갱신일 (원장 2026-10-24). 못 가는 계정(취소선)은 색 없이, 커서 줄은 색 뒤 굵기를 되살린다.
       const subTail = subRaw && r.ok && cur ? `${subRaw}${BOLD}` : subRaw;
       const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}${subTail}`;
       const shown = !r.ok ? dim(strike(body)) : cur ? bold(body) : body;
@@ -3781,10 +3822,28 @@ export class TUI {
     });
   }
 
-  /** Draw one row against a layout from _listLayout. */
-  _renderRow(/** @type {number} */ idx, /** @type {any} */ L, /** @type {Set<number>} */ current, /** @type {Map<number, any[]>|null} */ sessions = null) {
+  /** Draw one row against a layout from _listLayout. `parts`, when given, collects the row's
+   *  body and subscription tail instead of joining them (see _renderRows). */
+  _renderRow(/** @type {number} */ idx, /** @type {any} */ L, /** @type {Set<number>} */ current, /** @type {Map<number, any[]>|null} */ sessions = null, /** @type {any[]|null} */ parts = null) {
     const b = L.budgets.get(rowCategory(this.am.accounts[idx]));
-    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar, sessions: sessions?.get(idx) || null, width: L.width });
+    return this._renderAcct(idx, b.bw, b.showBoth, L.routes, L.genRoutes, L.familyTarget, b.showFamily, L.nameW, { current, compact: L.compact, shortBar: b.shortBar, sessions: sessions?.get(idx) || null, width: L.width, parts });
+  }
+
+  /**
+   * [local patch 2026-10-27 원장] 한 목록의 계정 줄들을 그린다 — 구독 꼬리(`· 구독 10/28 D-2`)가 모든 줄에서
+   * 같은 열에서 시작하도록 줄 몸통을 빈칸으로 맞춘 뒤 붙인다(F7·S7 칸이 있든 없든). 모자랄 때의 규칙은
+   * f57b973 그대로(F7·S7 먼저 빼고, 그래도 안 되면 꼬리 통째로 — 반쪽 금지)이고 alignSubTails 가 맡는다.
+   * @param {number[]} indices
+   * @param {any} L
+   * @param {Set<number>} current
+   * @param {Map<number, any[]>|null} [sessions]
+   * @returns {string[]}
+   */
+  _renderRows(indices, L, current, sessions = null) {
+    /** @type {any[]} */
+    const parts = [];
+    for (const idx of indices) this._renderRow(idx, L, current, sessions, parts);
+    return alignSubTails(parts);
   }
 
   /** The accounts of each provider present, in the order its rows are drawn. */
@@ -3986,7 +4045,7 @@ export class TUI {
     return formatHostLine(snap, W, this._cleanupAvailable() ? (this._leftovers ?? {}) : null);
   }
 
-  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null, width = 0 } = {}) {
+  _renderAcct(idx, bw, showBoth, routes = this.am.getRoutes(), genRoutes = routes.filter(r => routeFamily(r) === null), familyTarget = {}, showFamily = true, nameW = NAME_MIN, { current = this._currentRows(), compact = false, shortBar = true, sessions = null, width = 0, parts = null } = {}) {
     const a = this.am.accounts[idx];
     const isCur = current.has(idx);
     const isSel = this.mode === 'select' && idx === this.selIdx;
@@ -4233,6 +4292,8 @@ export class TUI {
     // [local patch 2026-10-26 원장] 줄 너비(width)를 알면 글자 중간에서 잘리지 않게:
     // 먼저 F7→S7 칸을 차례로 빼 보고, 그래도 안 들어가면 꼬리를 통째로 뺀다.
     const subTag = this._subscriptionTail(a);
+    // 목록 그리기(_renderRows)는 몸통과 꼬리를 따로 받아 열을 맞춘 뒤 붙인다.
+    if (parts) { parts.push({ body: line, droppable, tail: subTag, width }); return line; }
     if (subTag) {
       if (!(width > 0)) line += subTag;
       else {

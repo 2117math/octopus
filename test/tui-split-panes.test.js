@@ -46,8 +46,8 @@ function screen(am, width, { remote = false } = {}) {
   const drawn = [];
   try {
     const real = tui._renderRow.bind(tui);
-    tui._renderRow = (idx, L, current) => {
-      const out = real(idx, L, current);
+    tui._renderRow = (idx, L, current, ...rest) => {   // [2026-10-27] parts 등 뒤 인자를 그대로 넘긴다
+      const out = real(idx, L, current, ...rest);
       const b = L.budgets.get(rowCategoryOf(am.accounts[idx]));
       drawn.push({ idx, pane: L.compact, width: L.width, nameW: L.nameW, bw: b.bw, text: strip(out) });
       return out;

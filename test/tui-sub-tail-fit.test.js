@@ -36,8 +36,9 @@ function renderRows(width, { fableIdx = 4, sonnetIdx = null } = {}) {
   Object.defineProperty(process.stdout, 'rows', { value: 40, configurable: true });
   const drawn = [];
   try {
-    const real = tui._renderAcct.bind(tui);
-    tui._renderAcct = (...args) => { const out = real(...args); drawn.push(strip(out)); return out; };
+    // [2026-10-27] 꼬리 열 맞춤 때문에 줄은 _renderRows 가 몸통+꼬리를 합쳐 돌려준다.
+    const real = tui._renderRows.bind(tui);
+    tui._renderRows = (...args) => { const out = real(...args); drawn.push(...out.map(strip)); return out; };
     tui._paint = () => {};
     tui.running = true;
     tui.render(true);
