@@ -236,7 +236,9 @@ test('TUI: the F7 (Fable) marker sits on exactly one account — the routing tar
   assert.equal(marked.length, 1, 'exactly one F7 marker across all accounts');
   // ...and it is NOT the Fable-spent account a (which instead shows the ⊘ tag).
   assert.ok(!/►\s*F7/.test(rows[0]), 'the Fable-spent account carries no F7 marker');
-  assert.match(rows[0], /⊘ Fable/, 'the Fable-spent account is tagged blocked');
+  // [2026-10-27 원장] ⊘ Fable 장식은 TUI 에서 뺐다 — F7 막대의 100% 가 말해 준다.
+  assert.doesNotMatch(rows[0], /⊘|✗/, 'no Fable-spent decoration');
+  assert.match(rows[0], /F7/, 'the F7 bar is still drawn');
 });
 
 test('TUI routes editor: delete removes the selected route', async () => {

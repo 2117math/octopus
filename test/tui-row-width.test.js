@@ -117,18 +117,19 @@ test('the ⊘ tag gets its own room rather than being cut off', () => {
   for (const w of [80, 86, 100, 120]) {
     const rows = renderRows(w, { fable: [0.99, 0.29, 0.02, 0.0, 0.99, 0.0] });
     assert.ok(widest(rows) <= w, `W=${w}: widest row is ${widest(rows)} columns`);
-    const tagged = rows.filter(r => r.includes('⊘ Fable'));
-    assert.equal(tagged.length, 2, `W=${w}: both blocked accounts keep a whole tag`);
+    // [2026-10-27 원장] Fable 소진 장식(⊘ Fable)은 TUI 에서 뺐다 — 방에도 잡지 않는다.
+    assert.equal(rows.filter(r => r.includes('⊘')).length, 0, `W=${w}: no Fable tag`);
   }
 });
 
 test('family bars are dropped, not truncated, when they cannot fit', () => {
   // At 70 columns with a blocked family there is no room for a third bar even at
   // the minimum width. Dropping it keeps the row intact; the tag still says why.
-  const rows = renderRows(70, { fable: [0.99, 0.99, 0.99, 0.99, 0.99, 0.99] });
+  // [2026-10-27 원장] Fable 소진 장식은 뺐으므로 Sonnet 막힘 태그로 같은 좁힘을 만든다.
+  const rows = renderRows(70, { sonnet: [0.99, 0.99, 0.99, 0.99, 0.99, 0.99], fable: [0.99, 0.99, 0.99, 0.99, 0.99, 0.99] });
   assert.ok(widest(rows) <= 70, `widest row is ${widest(rows)} columns`);
   assert.ok(!rows.some(r => r.includes('F7')), 'the F7 bar is omitted rather than cut');
-  assert.ok(rows.every(r => r.includes('⊘ Fable')), 'the blocked tag still explains the state');
+  assert.ok(rows.every(r => r.includes('⊘ Sonnet') && !r.includes('Fable')), 'only the Sonnet tag remains');
 });
 
 test('blockedFamilies reports the families barred by their own weekly bucket', () => {
@@ -270,8 +271,9 @@ test('rows line up within their category, not across categories', () => {
 
 test('a blocked family on a subscription row does not shorten the API-key rows', () => {
   for (const w of UNCAPPED) {
-    const rows = renderRows(w, { fable: [null, 0.99, 0.02, null, 0.11, 0.0], apikey: [0, 3] });
-    assert.ok(rows.some(r => r.includes('⊘ Fable')), 'the fixture blocks a family');
+    // [2026-10-27 원장] Fable 소진 장식은 TUI 에서 뺐으므로 Sonnet 으로 막는다.
+    const rows = renderRows(w, { sonnet: [null, 0.99, 0.02, null, 0.11, 0.0], apikey: [0, 3] });
+    assert.ok(rows.some(r => r.includes('⊘ Sonnet')), 'the fixture blocks a family');
     assert.ok(widest(rows) <= w, `W=${w}: widest row is ${widest(rows)} columns`);
     const metered = rows.filter(isMetered);
     assert.ok(w - widest(metered) <= 3, `W=${w}: the tag cost the API-key rows ${w - widest(metered)} columns`);

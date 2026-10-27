@@ -479,6 +479,17 @@ export function blockedFamilies(quota, threshold) {
   return out;
 }
 
+/**
+ * [local patch 2026-10-27 원장] TUI 에 그리는 「막힌 계열」 — Fable 은 뺀다(원장: 「어차피 100%라고
+ * 써 있으면 된다」). F7 막대와 숫자는 그대로 두고 `⊘ Fable` 장식만 없앤다. 라우팅(blockedFamilies 를
+ * 읽는 쪽)과 `octopus status` 텍스트는 건드리지 않는다.
+ * @param {any} quota
+ * @param {number|((key: string) => number)} threshold
+ */
+function shownBlockedFamilies(quota, threshold) {
+  return blockedFamilies(quota, threshold).filter(n => n !== 'Fable');
+}
+
 // Matches THRESHOLD_BUCKET_LABELS in status-renderer.js — same short names on
 // both surfaces, so an operator moving from `teamclaude status` text to the
 // live TUI (or attach mode) sees the identical tag rather than relearning it.
@@ -3169,7 +3180,7 @@ export class TUI {
       const anyMonthly = members.some(a => bwLive(a.quota.backend?.windows?.monthly) != null && bwLive(a.quota.backend?.windows?.weekly) != null);
       const families = (anyFable ? 1 : 0) + (anySonnet ? 1 : 0) + (anyMonthly ? 1 : 0);
       const tagW = members.reduce((w, a) => {
-        const names = blockedFamilies(a.quota, key => this.am.thresholdFor(key, a));
+        const names = shownBlockedFamilies(a.quota, key => this.am.thresholdFor(key, a));
         return names.length ? Math.max(w, 4 + vw(names.join(' '))) : w;
       }, 0);
       // Same rule for the money tag (`$`, or the billed amount with its `/cap`):
@@ -4192,7 +4203,7 @@ export class TUI {
     // limFor, not thresholdFor: it is min(per-bucket threshold, per-account cap),
     // so the tag covers both ceilings and still judges each family against its
     // OWN configured threshold.
-    const blocked = blockedFamilies(q, limFor);
+    const blocked = shownBlockedFamilies(q, limFor);
     if (blocked.length) line += `  ${red('⊘ ' + blocked.join(' '))}`;
     // Money tag last, so it sits at the end of the row where the eye lands after
     // the bars. Red once real money has moved, yellow while it only could.
