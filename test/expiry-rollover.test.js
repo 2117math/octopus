@@ -1,3 +1,7 @@
+// [2026-10-27 원장] 한 번 자리를 잡은 대화는 그 계정이 계속 받을 수 있는 동안 옮기지 않는다 —
+// 세션 고정의 expiry 롤오버 선점(_selectForSession)을 뺐으므로, 「롤오버가 세션 고정을 옮긴다」·그 위에 쌓인
+// 롤 보류/확인 기계를 세션 경로로 시험하던 test.skip 항목들은 새 규칙에서 성립하지 않는다(새 규칙은
+// test/session-stay-until-5h.test.js). 전역 current 경로 시험은 그대로 켜 둠.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { AccountManager } from '../src/account-manager.js';
@@ -82,7 +86,7 @@ test('a session pin holds still across ordinary traffic', () => {
   }
 });
 
-test('a rollover on the pinned account re-routes the session, exactly once', () => {
+test.skip('a rollover on the pinned account re-routes the session, exactly once', () => {
   const am = pinnedFleet(ON);
   const first = serve(am, 's1', OPUS);
   rollWindow(am, first.index);
@@ -129,7 +133,7 @@ test('a window CLEARED and re-reported at the same instant is not a rollover', (
   assert.equal(serve(am, 's1', OPUS).index, first.index, 're-reporting the window moved the pin');
 });
 
-test('a window re-reported slightly LATER is not a rollover either', () => {
+test.skip('a window re-reported slightly LATER is not a rollover either', () => {
   // The forward half of the same drift, and the half ROLLOVER_MIN_JUMP_MS is
   // for. The two writers of a reset disagree on precision, so one instant
   // arrives as two values up to a second apart. Backward is not a jump under any
@@ -192,7 +196,7 @@ test('a rollover is tracked per bucket, so alternating models see no false jump'
   }
 });
 
-test('only the family whose window rolled is re-routed', () => {
+test.skip('only the family whose window rolled is re-routed', () => {
   const am = mgr(['a', 'b'], ON, { distributeSessions: true });
   for (const i of [0, 1]) {
     bucket(am, i, 'unified7d', 0.4, 10);
@@ -205,7 +209,7 @@ test('only the family whose window rolled is re-routed', () => {
   assert.equal(serve(am, 's1', OPUS).index, opus.index, 'the Opus pin moved on another family\'s roll');
 });
 
-test('a preemption with nowhere to go leaves the roll where the next request finds it', () => {
+test.skip('a preemption with nowhere to go leaves the roll where the next request finds it', () => {
   const am = pinnedFleet(ON);
   const first = serve(am, 's1', OPUS);
   const other = 1 - first.index;
@@ -421,7 +425,7 @@ function scoped(am, index, family, used, hours, base = Date.now()) {
   };
 }
 
-test('a rollover of the SCOPED governing window moves a pinned session', () => {
+test.skip('a rollover of the SCOPED governing window moves a pinned session', () => {
   // Ranking reads the scoped bucket when it is the one that binds. Identify the
   // window by the shared weekly instead and the scoped window can gain a full
   // week with no event at all, while the session pinned there goes on spending
@@ -723,7 +727,7 @@ function twoInFlight(order) {
   return am;
 }
 
-test('an attempt that settled nothing decides nothing, in either scheduling', () => {
+test.skip('an attempt that settled nothing decides nothing, in either scheduling', () => {
   // Where a request was SENT is not where it came to rest. A request refused by
   // its destination says nothing about the window it was pushed off having
   // become acceptable, and neither does a sibling served there while the first
@@ -740,7 +744,7 @@ test('an attempt that settled nothing decides nothing, in either scheduling', ()
 // Bookkeeping lifetime
 // ---------------------------------------------------------------------------
 
-test('removing an account renumbers the baselines rather than aiming them elsewhere', () => {
+test.skip('removing an account renumbers the baselines rather than aiming them elsewhere', () => {
   const am = mgr(['a', 'b', 'c'], ON, { distributeSessions: true });
   for (const i of [0, 1, 2]) bucket(am, i, 'unified7d', 0.4, 10);
   // s1 takes 'a'; s2 then spreads onto 'b', which is the pin this test is about
@@ -759,7 +763,7 @@ test('removing an account renumbers the baselines rather than aiming them elsewh
   assert.equal(serve(am, 's2', OPUS).name, 'c');
 });
 
-test('removing an account renumbers a reading taken after a preemption', () => {
+test.skip('removing an account renumbers a reading taken after a preemption', () => {
   // The same renumbering, for the reading a session takes on the account a
   // rollover moved it to. It names its account by the same bare position the
   // pins do, and left behind across a removal it is compared against whatever
@@ -900,7 +904,7 @@ function serveFailingOver(am, sessionId, model, dead) {
   return { first, retry };
 }
 
-test('a retry that falls back onto the rolled account leaves the rollover owed', () => {
+test.skip('a retry that falls back onto the rolled account leaves the rollover owed', () => {
   const am = pinnedFleet(ON);
   const first = serve(am, 's1', OPUS);
   const other = 1 - first.index;
@@ -916,7 +920,7 @@ test('a retry that falls back onto the rolled account leaves the rollover owed',
     'the failed fail-back priced the rolled account');
 });
 
-test('a retry re-entering past a session pin leaves the pin\'s reading on the account that rolled', () => {
+test.skip('a retry re-entering past a session pin leaves the pin\'s reading on the account that rolled', () => {
   // The pin names the preemption's destination while the pin's reading is still
   // on the account that rolled. A retry failing over FROM it takes no reading.
   const am = mgr(['a', 'b', 'c'], ON, { distributeSessions: true });
@@ -982,7 +986,7 @@ test('a retry re-entering past the current account leaves the reading on the acc
     'the roll is no longer read on the account that rolled');
 });
 
-test('a fail-back onto a FAMILY roll leaves the rollover owed', () => {
+test.skip('a fail-back onto a FAMILY roll leaves the rollover owed', () => {
   // Every fail-back arm above rolls `unified7d`. An aim consulting only that
   // window would find the shared weekly still and replace the whole reading, so
   // the fail-back would first-sight the week a family bucket had just gained.
@@ -1251,7 +1255,7 @@ test('the fleet that created a hold on a shared key settles it with its own succ
     'a roll the codex fleet already settled was charged a second time');
 });
 
-test('a roll held at a shared key is settled by any fleet the key serves', () => {
+test.skip('a roll held at a shared key is settled by any fleet the key serves', () => {
   // A pin is one slot per bucket too, and a session that has served both apps
   // holds a roll one of them was pushed off. The key is the only destination
   // either app has here, so it holds ONE reading for whichever of them it is
@@ -1781,7 +1785,7 @@ test('a fail-back holds the roll on the account it is leaving', () => {
     'the fail-back off b, which had not rolled, held a roll b never gained');
 });
 
-test('a pinned fail-back holds the roll on the account it is leaving', () => {
+test.skip('a pinned fail-back holds the roll on the account it is leaving', () => {
   // The same reading, in the store a session pin keeps. Both stores go through
   // the one restore, so a fix reaching only the sticky current account would
   // leave the pin spending the week the account it left had gained.
@@ -1871,7 +1875,7 @@ test('a confirmed serve releases a roll held against the account it rests on', (
     'the request after the return was preempted off a week already spent');
 });
 
-test('a hand-back keeps the fleet on the reading it restores and holds no roll it already handed back', () => {
+test.skip('a hand-back keeps the fleet on the reading it restores and holds no roll it already handed back', () => {
   // A hand-back outside a selection walk reads no fleet from the walk: the pin
   // store's restore runs from `recordSession`, after the walk has cleared it.
   // The reading it hands back was established by the fleet the hold names, so
@@ -2018,7 +2022,7 @@ test('a stay at a fail-back destination does not release the roll the hand-back 
     'the fleet parked on the week b had just gained');
 });
 
-test('a pinned fail-back holds its roll across the serves that confirm each stay', () => {
+test.skip('a pinned fail-back holds its roll across the serves that confirm each stay', () => {
   // The same fail-back in the store a session pin keeps, with the server's own
   // handshake around every request and the stamp read before each walk selects.
   // A confirmation the pin's own hand-back leaves reachable spends the pin's
@@ -2050,7 +2054,7 @@ test('a pinned fail-back holds its roll across the serves that confirm each stay
   assert.equal(req().name, 'd', 'the pin parked on the week c had just gained');
 });
 
-test('a roll displaced by a restore onto a reading no walk established still names a fleet', () => {
+test.skip('a roll displaced by a restore onto a reading no walk established still names a fleet', () => {
   // The pin's account is removed, so the session's reading is rebuilt naming
   // nobody and first-sights onto a third account from `recordSession`, outside
   // any walk. When that account rolls and selection goes back to one the chain
@@ -2087,7 +2091,7 @@ test('a roll displaced by a restore onto a reading no walk established still nam
     'the return did not take c\'s roll back off the chain, or held a\'s roll a second time');
 });
 
-test('a restore displaces a fleetless reading the same way with no account removed', () => {
+test.skip('a restore displaces a fleetless reading the same way with no account removed', () => {
   // The control on the removal. The finding's trigger deletes the pin, but the
   // reading a walk never stamped is what the hold is built from, and a first
   // sight from `recordSession` leaves one whether or not an account went away.
@@ -2114,7 +2118,7 @@ test('a restore displaces a fleetless reading the same way with no account remov
     'the control\'s displaced roll names no fleet either, so the removal is not the cause');
 });
 
-test('two accounts that have each rolled come to rest after one bounce', () => {
+test.skip('two accounts that have each rolled come to rest after one bounce', () => {
   // The reading a hand-back restores is the one from before the roll, so the
   // next request sees the roll again and the reset switch fires again. Held on
   // every departure, two rolls would trade places for ever; handed back once,
@@ -2166,7 +2170,7 @@ function handedBackToA(am) {
   return ex;
 }
 
-test('a rest governed by another window does not re-arm a roll already handed back', () => {
+test.skip('a rest governed by another window does not re-arm a roll already handed back', () => {
   // A HAIKU request served on a advances the shared window and says nothing
   // about the Opus roll the hand-back restored. The next departure from a
   // finds that roll as it was handed back, and holds nothing for it.
@@ -2179,7 +2183,7 @@ test('a rest governed by another window does not re-arm a roll already handed ba
     'a roll already handed back was held again after a rest under another window');
 });
 
-test('alternating traffic after a hand-back comes to rest', () => {
+test.skip('alternating traffic after a hand-back comes to rest', () => {
   // The trade the hand-back-once rule exists to stop, driven by two models on
   // one reading: without the rule per window, every HAIKU stay re-armed the
   // hold and the Opus pin bounced between a and c for ever.
@@ -2195,7 +2199,7 @@ test('alternating traffic after a hand-back comes to rest', () => {
     'a roll stayed held after the fleet came to rest');
 });
 
-test('a window that rolls after a hand-back is held and handed back on its own', () => {
+test.skip('a window that rolls after a hand-back is held and handed back on its own', () => {
   // The hand-back covers the roll it restored and no other. A first roll of
   // a's shared window while the pin rests there is a new event: the departure
   // holds it, and the fail-back is handed it.
@@ -2324,7 +2328,7 @@ test('a stay whose stamp the reading has left and returned to settles nothing', 
     'a stay under a stamp the reading had left and returned to released a roll anyway');
 });
 
-test('a session\'s confirmation releases under the bucket its stamp was taken under', () => {
+test.skip('a session\'s confirmation releases under the bucket its stamp was taken under', () => {
   // The stamp is read before the walk and the confirmation lands after the
   // response, so a route edit can arrive between them. Resolving the bucket again
   // would settle one this session has no observation under.
@@ -2363,7 +2367,7 @@ test('a session\'s confirmation releases under the bucket its stamp was taken un
     'the session was preempted off a again for a roll its own stay had settled');
 });
 
-test('removing an account renumbers a session pin\'s held roll too', () => {
+test.skip('removing an account renumbers a session pin\'s held roll too', () => {
   // The pin's observation holds one the same way the cursor's does, and it is
   // renumbered by a different function in a different module — so it gets its
   // own arm rather than resting on the cursor's.
@@ -2382,7 +2386,7 @@ test('removing an account renumbers a session pin\'s held roll too', () => {
     'the pin\'s held roll outlived the account it was taken on');
 });
 
-test('removing the account a pin\'s reading names keeps the roll it holds', () => {
+test.skip('removing the account a pin\'s reading names keeps the roll it holds', () => {
   // The pin store answers the same question the cursor store does, by different
   // code. The ref names the account that went away, but the roll it holds is
   // another account's and is still owed there, so the ref stays on naming nobody
@@ -2417,7 +2421,7 @@ test('removing the account a pin\'s reading names keeps the roll it holds', () =
     'the fail-back onto a did not find the week a gained still held');
 });
 
-test('a pin ref that stayed on for one roll goes away with it', () => {
+test.skip('a pin ref that stayed on for one roll goes away with it', () => {
   // The other half of the one drop rule the arm above turns on: a ref naming
   // nobody is kept only by what it holds, so once the last roll on it goes with
   // the account it was taken on there is nothing left to be evidence about.
@@ -2504,7 +2508,7 @@ test('removing an account renumbers every roll an observation is holding', () =>
     'removing the account of one escape took the roll of another with it');
 });
 
-test('a destination is measured from the first request that rests on it', () => {
+test.skip('a destination is measured from the first request that rests on it', () => {
   // A preemption aims at b and takes no reading there, so a roll on b before any
   // request has rested there is a first sight — the same as for an account a
   // brand-new session is placed on. That cost is asserted here, not hidden.
@@ -2563,7 +2567,7 @@ test('hot-enabling the feature ends a drain a rollover should have ended', () =>
     'the draining session never saw the roll that bounds its drain');
 });
 
-test('hot-enabling the feature does not miss the first rollover after it', () => {
+test.skip('hot-enabling the feature does not miss the first rollover after it', () => {
   const am = mgr(['a', 'b'], undefined, { distributeSessions: true });
   bucket(am, 0, 'unified7d', 0.4, 10);
   bucket(am, 1, 'unified7d', 0.4, 10);
@@ -2574,7 +2578,7 @@ test('hot-enabling the feature does not miss the first rollover after it', () =>
     'the first roll after the knob went on was read as a first sight');
 });
 
-test('re-applying the same setting does not re-read what is already being watched', () => {
+test.skip('re-applying the same setting does not re-read what is already being watched', () => {
   // Only the OFF → ON transition takes a reading. Every config reload while the
   // feature is already on re-applies the same object, and a server notified once
   // a minute would otherwise re-read every reference each time — leaving nothing
@@ -2616,7 +2620,7 @@ test('a session that leaves an account and comes back while OFF is measured afre
 });
 
 
-test('nothing survives the knob being off, so a roll from that interval is a first sight', () => {
+test.skip('nothing survives the knob being off, so a roll from that interval is a first sight', () => {
   // The lifetime is the guarantee: switching off drops every observation, so an
   // interval in which nothing was watching leaves nothing behind, and the first
   // request after the knob comes back takes an honest first sight. The cost is
@@ -3026,7 +3030,7 @@ test('the requalification rerank cannot spend the roll of the account it leaves'
 });
 
 
-test('a knob toggled mid-request cannot leave a roll half-answered', () => {
+test.skip('a knob toggled mid-request cannot leave a roll half-answered', () => {
   // The reload arrives between the preemption and the retry its destination
   // forced. Turning the knob off drops every observation, so the retry and the
   // request after it are measured from what the accounts present when the knob

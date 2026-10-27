@@ -45,12 +45,16 @@ test('집중 계정이 새 세션의 맨 앞이다(주간 사용률이 가장 �
   for (const k of ['B/1', 'B/2', 'B/3', 'B/4']) assert.equal(pick(am, k), 'acct0', k);
 });
 
-test('다른 계정에 고정된 세션도 다음 요청에서 집중 계정으로 옮겨진다', () => {
+// [2026-10-27 원장] 이미 쓸 수 있는 계정에 고정된 대화는 집중 계정이 생겨도 옮기지 않는다(기대값 수정 —
+// 옛: 집중 계정으로 옮겨짐). 집중은 새 대화와 고정 계정이 못 받게 된 대화에만 적용(session-stay-until-5h.test.js).
+test('다른 계정에 고정된 세션은 집중 계정이 생겨도 그대로, 고정 계정이 못 받으면 집중 계정으로', () => {
   const am = fleet();
   am.sessionTracker.touch('A/pinned', 1, 'unified7d');
   assert.equal(pick(am, 'A/pinned'), 'acct1', '집중 없음: 고정 유지');
   am.setFocusAccount('acct2');
-  assert.equal(pick(am, 'A/pinned'), 'acct2');
+  assert.equal(pick(am, 'A/pinned'), 'acct1', '집중 지정 뒤에도 고정 유지');
+  am.accounts[1].quota.unified5h = 0.99;
+  assert.equal(pick(am, 'A/pinned'), 'acct2', '고정 계정이 못 받으면 집중 계정');
 });
 
 test('집중 계정이 5h 한도에 걸리면 다른 계정이 이어받고, 풀리면 돌아온다(로그 한 줄씩)', () => {
@@ -91,7 +95,7 @@ test('해제하면 원래 규칙으로 돌아간다', () => {
   const am = fleet([0.50, 0.10, 0.20]);
   am.sessionTracker.touch('A/pinned', 1, 'unified7d');
   am.setFocusAccount('acct0');
-  assert.equal(pick(am, 'A/pinned'), 'acct0');
+  assert.equal(pick(am, 'A/fresh'), 'acct0', '[2026-10-27 원장] 새 대화는 집중 계정(고정된 대화는 안 옮김)');
   am.setFocusAccount(null);
   assert.equal(am.focusInfo(), null);
   assert.equal(am.getStatus().focusAccount, null);

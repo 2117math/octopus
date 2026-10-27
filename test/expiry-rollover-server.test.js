@@ -1,3 +1,4 @@
+import { test as baseTest } from 'node:test';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -185,6 +186,8 @@ for (const distribute of [false, true]) {
   // distributeSessions is off by default, so the current-account walk is what an
   // operator who turns expiry routing on alone actually runs.
   const sid = distribute ? 's1' : null;
+  // [2026-10-27 원장] 세션 경로 변형은 세션 고정의 롤오버 선점이 없어져 성립하지 않아 skip(새 규칙 = test/session-stay-until-5h.test.js).
+  const test = distribute ? baseTest.skip : baseTest;
 
   test(`${path} path: a request selected inside the preemption's suspension cannot spend its rollover`, async () => {
     const reached = deferred('the upstream to be reached');

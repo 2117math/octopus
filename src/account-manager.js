@@ -1568,9 +1568,12 @@ export class AccountManager {
     // The empty set marks this call as a request's, since a poll hands none.
     // Allocated fresh: a set handed out once is one a later reader could add to.
     this.refreshExpiredQuotas(model, this.expiryRouting.enabled ? (exclude ?? new Set()) : exclude, advisorModel);
-    // [local patch 2026-10-27 원장] 집중 계정: 수동 route 고정이 아니면 세션 고정·분배보다 먼저.
-    // 이미 다른 계정에 고정된 세션도 여기서 집중 계정으로 옮겨진다(서빙 계정으로 고정이 다시 기록됨).
-    if (this.focusAccountName && !this._pinnedAccountForModel(model, advisorModel)) {
+    // [local patch 2026-10-27 원장] 집중 계정: 수동 route 고정이 아니면 분배보다 먼저. 단 이 대화가 이미
+    // 쓸 수 있는 자기 고정 계정에 앉아 있으면 그대로 둔다(옮기면 프롬프트 캐시 손실) — 집중 계정은 새 대화
+    // 배치와 고정 계정이 더는 못 받게 된 대화에만 적용된다(그때는 서빙 계정으로 고정이 다시 기록됨).
+    if (this.focusAccountName && !this._pinnedAccountForModel(model, advisorModel)
+        && !(sessionId && (this.distributeSessions || this._isDrainingSession(sessionId))
+             && this._ownPinUsable(sessionId, exclude, model, advisorModel))) {
       const focus = this._focusPick(exclude, model, advisorModel);
       if (focus) return focus;
     }
@@ -1748,6 +1751,18 @@ export class AccountManager {
     return candidates[cursor % candidates.length];
   }
 
+  /** [local patch 2026-10-27 원장] 이 대화 자신의 고정 계정(요청 버킷 pin → 다른 모델군 pin) 중 지금 이
+   *  요청을 받을 수 있는 것이 있는가. 형제 자리(sessionAffinity)는 포함하지 않는다. 읽기만 한다. */
+  _ownPinUsable(sessionId, exclude, model, advisorModel) {
+    const pinIdx = this.sessionTracker.pinnedAccount(sessionId, this._weeklyBucketFor(model));
+    const idxs = pinIdx != null ? [pinIdx] : [];
+    for (const idx of this.sessionTracker.pinnedAccounts(sessionId)) if (!idxs.includes(idx)) idxs.push(idx);
+    return idxs.some(idx => {
+      const a = this.accounts[idx];
+      return !!a && this._isAvailable(a, model, advisorModel) && !exclude?.has(idx);
+    });
+  }
+
   _selectForSession(sessionId, exclude, model, advisorModel) {
     // The pin is per governing bucket, and this request is bound by the
     // EXECUTOR's: one request goes to one account, so the executor's affinity is
@@ -1779,34 +1794,9 @@ export class AccountManager {
       // while this account was out of reach is still there to be found when
       // traffic returns to it.
       if (!this._isAvailable(pinned, model, advisorModel) || exclude?.has(idx)) continue;
-      // Rollover preemption (expiry routing): this candidate rolled over its
-      // governing window, so staying would burn the week it just gained while
-      // sooner-expiring quota goes unspent — the only pressure-driven force on a
-      // pin, at one cache miss per pinned session per rollover. Asked of every
-      // candidate rather than the bucket's pin alone, since a session sitting on
-      // another family's account is just as stuck, and a rollover re-ranks so
-      // that pressure picks the destination.
-      if (this.expiryRouting.enabled && this.expiryRouting.preempt
-          && this._pinRolledOver(sessionId, pinned, model)) {
-        const next = this._pickLeastLoaded(exclude, model, advisorModel);
-        if (next && next.index !== idx) {
-          // A fleet-wide rollover moves every session pinned to that account at
-          // once, so the destination gets the same failover burst any other
-          // switch would send it — pace it (issue #84).
-          this._beginRamp(next);
-          console.log(`[Octopus] Session pin on "${pinned.name}" released — its weekly window rolled over; re-routing to "${next.name}"`);
-          return next;
-        }
-        // The traffic did not move, so the observation is left where it is and
-        // the next request asks again.
-        this._noteHeldRollover(pinned, model, advisorModel, exclude);
-        return pinned;
-      }
-      // Mirror _select's priority preemption so an operator's priority order
-      // still wins over a session's stickiness.
-      const betterExists = this.accounts.some(a =>
-        this._isAvailable(a, model, advisorModel) && !exclude?.has(a.index) && (a.priority || 0) < (pinned.priority || 0));
-      if (!betterExists) return this._rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) || pinned;
+      // [local patch 2026-10-27 원장] 한 번 자리를 잡은 대화는 그 계정이 계속 받을 수 있는 동안(위 가용
+      // 검사) 옮기지 않는다 — priority 선점·expiry 롤오버 선점으로 옮기던 것을 뺐다(캐시 손실 방지).
+      return this._rebalanceIdle(sessionId, pinned, exclude, model, advisorModel) || pinned;
     }
     // [local patch] Session affinity: no pin of this conversation's own was
     // usable, but its client session may already be seated — on the account
