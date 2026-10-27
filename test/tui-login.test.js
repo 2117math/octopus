@@ -32,11 +32,11 @@ function makeTUI({ accounts, loginAccount, remote = false } = {}) {
 const logged = tui => tui.log.map(e => stripAnsi(e.msg));
 
 test('login: the footer offers the key only where a login can actually run', () => {
-  assert.match(stripAnsi(makeTUI({ loginAccount: async () => ({}) })._renderFooter()), /login/);
+  assert.match(stripAnsi(makeTUI({ loginAccount: async () => ({}) })._renderFooter()), /로그인/);
   // No callback wired (an embedder that cannot log in): no dead key on screen.
-  assert.doesNotMatch(stripAnsi(makeTUI()._renderFooter()), /login/);
+  assert.doesNotMatch(stripAnsi(makeTUI()._renderFooter()), /로그인/);
   // Attach mode edits nothing local; the server's own TUI is where this lives.
-  assert.doesNotMatch(stripAnsi(makeTUI({ loginAccount: async () => ({}), remote: true })._renderFooter()), /login/);
+  assert.doesNotMatch(stripAnsi(makeTUI({ loginAccount: async () => ({}), remote: true })._renderFooter()), /로그인/);
 });
 
 test('login: `l` opens the picker on the first account that needs a sign-in', () => {

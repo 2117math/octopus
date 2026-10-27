@@ -56,6 +56,21 @@ const BOLD = `${ESC}1m`;
 const DIM = `${ESC}2m`;
 const REV = `${ESC}7m`;   // reverse video — used for the BIOS-style settings cursor
 
+// [local patch 2026-10-27 원장] 한/영·Shift 상태와 상관없이 단축키가 먹게:
+// 두벌식 자모를 그 자리의 영문 소문자로, 대문자는 소문자로 바꾼다.
+// 글자 입력 화면(input·login)에는 쓰지 않는다.
+const HANGUL_KEYS = {
+  'ㅂ': 'q', 'ㅃ': 'q', 'ㅈ': 'w', 'ㅉ': 'w', 'ㄷ': 'e', 'ㄸ': 'e', 'ㄱ': 'r', 'ㄲ': 'r',
+  'ㅅ': 't', 'ㅆ': 't', 'ㅛ': 'y', 'ㅕ': 'u', 'ㅑ': 'i', 'ㅐ': 'o', 'ㅒ': 'o', 'ㅔ': 'p', 'ㅖ': 'p',
+  'ㅁ': 'a', 'ㄴ': 's', 'ㅇ': 'd', 'ㄹ': 'f', 'ㅎ': 'g', 'ㅗ': 'h', 'ㅓ': 'j', 'ㅏ': 'k', 'ㅣ': 'l',
+  'ㅋ': 'z', 'ㅌ': 'x', 'ㅊ': 'c', 'ㅍ': 'v', 'ㅠ': 'b', 'ㅜ': 'n', 'ㅡ': 'm',
+};
+export function normalizeHotkey(k) {
+  if (typeof k !== 'string' || k.length !== 1) return k;
+  if (HANGUL_KEYS[k]) return HANGUL_KEYS[k];
+  return k >= 'A' && k <= 'Z' ? k.toLowerCase() : k;
+}
+
 const bold = s => `${BOLD}${s}${RESET}`;
 const dim = s => `${DIM}${s}${RESET}`;
 const fg = (c, s) => `${ESC}${c}m${s}${RESET}`;
@@ -1470,6 +1485,7 @@ export class TUI {
 
   _key(k) {
     if (k === 'ctrl-c') { this.stop(); this.onQuit?.(); return; }
+    if (this.mode !== 'input' && this.mode !== 'login') k = normalizeHotkey(k);
 
     switch (this.mode) {
       case 'normal': this._keyNormal(k); break;
@@ -1495,7 +1511,7 @@ export class TUI {
       // server names an account that has since gone); start at the top instead.
       this.mode = 'select'; this.selAction = 'switch'; this.selIdx = Math.max(0, this.am.currentIndex); this.selRoute = null; this.selReturn = 'normal';
     }
-    else if (k === 'R') { this._doSync(); }
+    else if (k === 'r' || k === 'R') { this._doSync(); }
     // Available in attach mode too: there the move is a request to the server.
     // [local patch 2026-10-27 원장] 대문자도 받는다(Shift 를 눌러 안 되던 일).
     else if ((k === 'm' || k === 'M') && this.am.accounts.length > 0) { this._openMove(); }
@@ -4776,8 +4792,8 @@ export class TUI {
     switch (this.mode) {
       case 'normal':
         return this.remote
-          ? ` ${bold('s')}witch  ${bold('m')}ove  ${bold('R')}eload  ${bold('q')}uit`
-          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('f')} 집중  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${this._cleanupAvailable() ? `${bold('x')} 정리  ` : ''}${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+          ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'cleanup':
         return this.cleanup?.stage === 'list'
           ? ` ${bold('y')} 모두 끄기  ${bold('Esc')} 닫기`

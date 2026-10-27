@@ -452,7 +452,8 @@ test('on loopback a 401 blames the port, not the key the server never checks', a
 test('keys that would need write endpoints are inert in attach mode', async (t) => {
   const { tui, am, seen } = await makeSession(t);
   am.applyStatus(statusFixture());
-  for (const k of ['g', 'd', 'p', 'a', 'r']) tui._key(k);
+  // 'r' 은 이제 새로고침(대소문자 무시, 원장 2026-10-27)이라 뺐다.
+  for (const k of ['g', 'd', 'p', 'a']) tui._key(k);
   await nothingHappens();
   assert.equal(tui.mode, 'normal');
   assert.deepEqual(tui.log, []);
@@ -635,8 +636,8 @@ test('the dashboard renders accounts from a status payload alone', async (t) => 
   assert.match(out, /bravo/);
   assert.match(out, /oauth/);
   assert.match(out, /▲/); // connected
-  assert.match(out, /switch/); // attach footer
-  assert.doesNotMatch(out, /settings/); // settings screen is not reachable here
+  assert.match(out, /계정전환/); // attach footer (원장 2026-10-27 한글 라벨)
+  assert.doesNotMatch(out, /설정/); // settings screen is not reachable here
 });
 
 test('a stale dashboard says so instead of looking live', async (t) => {
