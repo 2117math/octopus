@@ -1869,6 +1869,42 @@ export class AccountManager {
    * scores the tier by remaining credit and congestion; even (the original)
    * spreads by active-session count. */
   _pickLeastLoaded(exclude = null, model = null, advisorModel = null) {
+    // [local patch 2026-10-27 원장] Opus 새 대화는 Fable 을 다 쓴 계정부터: 그 계정은 어차피 Fable 을 못 받으니
+    // Opus 는 거기서 쓰고, Fable 이 남은 계정은 Fable 용으로 아낀다. 후보를 그 계정들로 좁혀 기존 규칙
+    // (priority·분배)을 그 안에서 그대로 돌리고, 그 안에 받을 계정이 없으면 기존 규칙 전체로.
+    const spentOnly = this._opusFableSpentExclude(exclude, model, advisorModel);
+    if (spentOnly) {
+      const picked = this._placeLeastLoaded(spentOnly, model, advisorModel);
+      if (picked) return picked;
+    }
+    return this._placeLeastLoaded(exclude, model, advisorModel);
+  }
+
+  /** [local patch 2026-10-27 원장] Fable 계열을 못 받는 계정인가 — tui.js `blockedFamilies` 와 같은 비교
+   *  (라우터가 보는 gatingUtilization 이 계정 임계 이상). Fable 미터가 없는 계정은 아님. tui.js 가 이 파일을
+   *  import 하므로 순환을 피해 여기서 같은 식으로 계산한다(시험이 두 결과가 같음을 확인). */
+  _fableSpent(account) {
+    const q = account.quota;
+    if (q.unified7dFable == null) return false;
+    const g = gatingUtilization(q, 'unified7dFable');
+    return g != null && g >= this.thresholdFor('unified7dFable', account);
+  }
+
+  /** [local patch 2026-10-27 원장] Opus 요청이고 받을 수 있는 계정 중 Fable 100% 계정과 아닌 계정이 섞여
+   *  있으면, 아닌 계정(집중 계정 제외)을 뺀 exclude 집합. 좁힐 일이 없으면 null. */
+  _opusFableSpentExclude(exclude, model, advisorModel) {
+    if (!model || !/opus/i.test(model)) return null;
+    const avail = this.accounts.filter(a => !exclude?.has(a.index) && this._isAvailable(a, model, advisorModel));
+    const spent = avail.filter(a => this._fableSpent(a));
+    if (spent.length === 0 || spent.length === avail.length) return null;
+    const out = new Set(exclude ?? []);
+    for (const a of avail) {
+      if (!this._fableSpent(a) && a.name !== this.focusAccountName) out.add(a.index);
+    }
+    return out;
+  }
+
+  _placeLeastLoaded(exclude = null, model = null, advisorModel = null) {
     if (this.distributionMode === 'adaptive') {
       const picked = this._pickAdaptive(exclude, model, advisorModel);
       // Adaptive can legitimately score every candidate at zero — the whole
