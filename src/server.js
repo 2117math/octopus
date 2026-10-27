@@ -28,6 +28,7 @@ import { classificationPath } from './classification-path.js';
 import { serveManagementMcp } from './mcp-tools.js';
 import { codexSpentWindows, isAccountWideCodexWindow } from './codex-quota.js';
 import { atomicConfigUpdate } from './config.js';
+import { fetchUsageRaw } from './oauth.js';
 import { ConfigOpError, setThreshold, thresholdRatio } from './config-ops.js';
 import { envVar, legacyControlUrl } from './brand.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
@@ -235,6 +236,44 @@ export function isForeignFableQuotaHeader(name, value, model) {
   const lk = String(name).toLowerCase();
   if (lk.startsWith('anthropic-ratelimit-unified-7d_oi-')) return true;
   return lk === 'anthropic-ratelimit-unified-representative-claim' && /oi/i.test(String(value));
+}
+
+// [local patch 2026-10-27 원장] Claude Code 는 대화 중에도 /api/oauth/usage 로 「내 계정」 사용량을
+// 읽고, Fable 주간이 다 찼으면 /model Fable 을 막거나 Opus 로 바꾸라고 한다. 이 경로는 원래 클라이언트
+// 자기 로그인으로 통과시키는데(CLIENT_CREDENTIAL_PATHS), PC1 처럼 로그인 계정(2117math)이 풀에서
+// 빠졌거나 다 쓴 경우 풀에는 여유가 있는데도 막혔다. 그래서 이 한 경로만 풀 계정 하나의 사용량으로
+// 답한다 — 지금 받을 수 있는 OAuth 계정 중 max(5시간, 주간, Fable 주간) 이 가장 낮은 계정.
+// 실패하면 false 를 돌려 원래대로(클라이언트 자기 계정) 통과시킨다. 설정 poolUsage:false 로 끈다.
+/**
+ * @param {any[]} accounts
+ * @returns {any|null}
+ */
+export function pickUsageAccount(accounts) {
+  let best = null, bestScore = Infinity;
+  for (const a of accounts || []) {
+    if (!a || a.type !== 'oauth' || !a.credential || a.disabled || a.status === 'error' || a.upstream) continue;
+    if (providerOf(a) !== DEFAULT_PROVIDER) continue;
+    const q = a.quota || {};
+    const score = Math.max(q.unified5h ?? 0, q.unified7d ?? 0, q.unified7dFable ?? 0);
+    if (score < bestScore) { best = a; bestScore = score; }
+  }
+  return best;
+}
+
+/**
+ * @param {import('node:http').ServerResponse} res
+ * @param {any} accountManager
+ * @returns {Promise<boolean>} 답했으면 true
+ */
+async function servePoolUsage(res, accountManager) {
+  const acct = pickUsageAccount(accountManager?.accounts);
+  if (!acct) return false;
+  try { await accountManager.ensureTokenFresh?.(acct.index); } catch { return false; }
+  const r = await fetchUsageRaw(acct.credential, acct.routing ?? null);
+  if ('error' in r || r.status !== 200) return false;
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(r.body);
+  return true;
 }
 
 /**
@@ -1722,6 +1761,8 @@ export function createProxyRequestListener({ accountManager, upstream, logDir = 
       if (passthrough) { await relayStream(req, res, passthrough, sx, shouldStripOverageHeaders(config)); return; }
 
       const classifiedPath = classificationPath(req.url);
+      if (req.method === 'GET' && classifiedPath === '/api/oauth/usage' && config?.poolUsage !== false
+          && await servePoolUsage(res, accountManager)) return;
       if (isClientCredentialPath(classifiedPath)) { await relayStream(req, res, upstream, sx, shouldStripOverageHeaders(config)); return; }
 
       // MITM-mode pin. A CONNECT carrying `Proxy-Authorization: Basic <acct>:…`

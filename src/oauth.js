@@ -609,6 +609,30 @@ export async function fetchUsage(accessToken, routing = null, { fetchImpl = prox
 }
 
 /**
+ * [local patch 2026-10-27 원장] 풀 계정의 /api/oauth/usage 응답을 그대로(가공 없이) 받는다 —
+ * 클라이언트(Claude Code)의 사용량 조회에 풀 기준으로 답할 때 쓴다(server.js servePoolUsage).
+ * @param {string} accessToken
+ * @param {import('./account-routing.js').RoutingProxy|null} [routing]
+ * @returns {Promise<{ status: number, body: string } | { error: string }>}
+ */
+export async function fetchUsageRaw(accessToken, routing = null, { fetchImpl = proxyFetch } = {}) {
+  try {
+    const res = await fetchImpl(USAGE_URL, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'anthropic-beta': OAUTH_USAGE_BETA,
+        'Accept': 'application/json',
+        'User-Agent': USAGE_USER_AGENT,
+      },
+      routing,
+    });
+    return { status: res.status, body: await res.text() };
+  } catch (err) {
+    return { error: err.message || String(err) };
+  }
+}
+
+/**
  * Map a /api/oauth/usage payload to the buckets the quota model tracks. Pure, so
  * the mapping is testable without a network round trip.
  */
