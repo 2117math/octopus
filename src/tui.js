@@ -512,14 +512,15 @@ export function alignSubTails(items) {
 }
 
 /**
- * [local patch 2026-10-27 원장] TUI 에 그리는 「막힌 계열」 — Fable 은 뺀다(원장: 「어차피 100%라고
- * 써 있으면 된다」). F7 막대와 숫자는 그대로 두고 `⊘ Fable` 장식만 없앤다. 라우팅(blockedFamilies 를
- * 읽는 쪽)과 `octopus status` 텍스트는 건드리지 않는다.
+ * [local patch 2026-10-27 원장] TUI 에 그리는 「막힌 계열」 — Fable·Sonnet 둘 다 뺀다(원장: 「어차피
+ * 100%라고 써 있으면 된다」 → 「소넷 다 쓴 계정 표시도 빼 줘」). F7·S7 막대와 숫자는 그대로 두고
+ * `⊘ Fable`·`⊘ Sonnet` 장식만 없앤다. 라우팅(blockedFamilies 를 읽는 쪽)과 `octopus status` 텍스트는
+ * 건드리지 않는다.
  * @param {any} quota
  * @param {number|((key: string) => number)} threshold
  */
 function shownBlockedFamilies(quota, threshold) {
-  return blockedFamilies(quota, threshold).filter(n => n !== 'Fable');
+  return blockedFamilies(quota, threshold).filter(n => n !== 'Fable' && n !== 'Sonnet');
 }
 
 // Matches THRESHOLD_BUCKET_LABELS in status-renderer.js — same short names on

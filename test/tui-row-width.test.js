@@ -125,11 +125,11 @@ test('the ⊘ tag gets its own room rather than being cut off', () => {
 test('family bars are dropped, not truncated, when they cannot fit', () => {
   // At 70 columns with a blocked family there is no room for a third bar even at
   // the minimum width. Dropping it keeps the row intact; the tag still says why.
-  // [2026-10-27 원장] Fable 소진 장식은 뺐으므로 Sonnet 막힘 태그로 같은 좁힘을 만든다.
+  // [2026-10-27 원장] Fable·Sonnet 소진 장식(⊘)은 TUI 에서 둘 다 뺐다 — 막대만 빠지고 태그는 없다.
   const rows = renderRows(70, { sonnet: [0.99, 0.99, 0.99, 0.99, 0.99, 0.99], fable: [0.99, 0.99, 0.99, 0.99, 0.99, 0.99] });
   assert.ok(widest(rows) <= 70, `widest row is ${widest(rows)} columns`);
   assert.ok(!rows.some(r => r.includes('F7')), 'the F7 bar is omitted rather than cut');
-  assert.ok(rows.every(r => r.includes('⊘ Sonnet') && !r.includes('Fable')), 'only the Sonnet tag remains');
+  assert.ok(rows.every(r => !r.includes('⊘')), 'no blocked-family tag');
 });
 
 test('blockedFamilies reports the families barred by their own weekly bucket', () => {
@@ -226,11 +226,10 @@ test('a blocked row with general routes does not overflow', () => {
   }
 });
 
-// The blocked tag is the point of the row at that moment, so dropping a bar to
-// make room must not drop the tag with it.
-test('the blocked tag survives the narrowing', () => {
+// [2026-10-27 원장] ⊘ 태그는 TUI 에서 뺐다(Fable·Sonnet 둘 다) — 두 계열을 다 써도 계정 줄에 ⊘ 가 없다.
+test('no blocked tag even when both families are spent', () => {
   const rows = renderRows(70, { accounts: 2, fable: [SPENT, SPENT], sonnet: [SPENT, SPENT] });
-  assert.ok(rows.some(r => r.includes('⊘')), 'the blocked tag was dropped to fit');
+  assert.ok(rows.every(r => !r.includes('⊘')), 'a blocked tag was drawn');
 });
 
 // #234's two remaining cases were about a MIXED fleet. The budget was fleet-wide,
@@ -271,9 +270,9 @@ test('rows line up within their category, not across categories', () => {
 
 test('a blocked family on a subscription row does not shorten the API-key rows', () => {
   for (const w of UNCAPPED) {
-    // [2026-10-27 원장] Fable 소진 장식은 TUI 에서 뺐으므로 Sonnet 으로 막는다.
+    // [2026-10-27 원장] Fable·Sonnet 소진 장식(⊘)은 TUI 에서 뺐다 — 막혀도 태그가 없다.
     const rows = renderRows(w, { sonnet: [null, 0.99, 0.02, null, 0.11, 0.0], apikey: [0, 3] });
-    assert.ok(rows.some(r => r.includes('⊘ Sonnet')), 'the fixture blocks a family');
+    assert.ok(rows.every(r => !r.includes('⊘')), 'no blocked-family tag');
     assert.ok(widest(rows) <= w, `W=${w}: widest row is ${widest(rows)} columns`);
     const metered = rows.filter(isMetered);
     assert.ok(w - widest(metered) <= 3, `W=${w}: the tag cost the API-key rows ${w - widest(metered)} columns`);
