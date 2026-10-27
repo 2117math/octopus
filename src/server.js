@@ -217,6 +217,26 @@ export function isOverageHeader(name) {
 // dispatched, so a reload applies to subsequent requests without a restart; a
 // request already in flight keeps the value it was dispatched with. Off
 // unless explicitly enabled.
+// [local patch 2026-10-27 원장] Fable 이 아닌 요청(Opus 등)의 응답에서는 Fable 주간 칸
+// (anthropic-ratelimit-unified-7d_oi-*)과 그 칸을 가리키는 representative-claim 을 클라이언트에
+// 넘기지 않는다. Opus 새 대화는 일부러 Fable 다 쓴 계정부터 받는데(CLAUDE.md 15번), 그 계정의
+// 「Fable 100%·rejected」를 Claude Code 가 자기 계정 상태로 기억해 /model 로 Fable 전환을 막고
+// 「업그레이드」를 띄웠다 — 풀에는 Fable 을 받을 계정이 있는데도. 대화를 새로 열면 풀리던 증상.
+// Fable 요청의 응답은 Fable 을 실제로 받은 계정 것이라 그대로 둔다. updateQuota 는 전체 헤더를 본다.
+/**
+ * @param {string} name
+ * @param {string} value
+ * @param {string|null|undefined} model  요청 모델
+ * @returns {boolean} 클라이언트로 넘기지 않을 헤더면 true
+ */
+export function isForeignFableQuotaHeader(name, value, model) {
+  // 확실히 다른 모델군일 때만(모르는 이름은 그대로 넘김).
+  if (!/opus|sonnet|haiku/i.test(String(model || '')) || /fable/i.test(String(model || ''))) return false;
+  const lk = String(name).toLowerCase();
+  if (lk.startsWith('anthropic-ratelimit-unified-7d_oi-')) return true;
+  return lk === 'anthropic-ratelimit-unified-representative-claim' && /oi/i.test(String(value));
+}
+
 /**
  * @param {unknown} config
  * @returns {boolean}
@@ -3966,6 +3986,7 @@ export async function forwardRequest(req, res, body, accountManager, upstream, r
       // Per-org billing state, dropped when stripOverageHeaders is on (see
       // isOverageHeader); updateQuota above already saw the full header set.
       if (ctx.stripOverage === true && isOverageHeader(key)) continue;
+      if (isForeignFableQuotaHeader(key, value, ctx.model)) continue;
       responseHeaders[key] = value;
     }
 

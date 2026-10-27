@@ -110,6 +110,7 @@ export function createDefaultConfig() {
     sessionAffinity: true,
     sessionTitles: { enabled: false, width: 18 },
     quotaBarPercent: false,
+    hideSpent: false,
     // Activity rows: 'full' (method and path) or 'compact' (wider session title).
     activityFormat: 'full',
     accountSort: 'arranged',

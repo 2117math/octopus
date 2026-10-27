@@ -120,6 +120,18 @@ const SESSION_ROW_WINDOW_MS = 10 * 60 * 1000;
 // The Sessions panel under the account list: at most this many session lines
 // (the rest are counted), and the widest an account or model column may get.
 const SESSIONS_PANEL_MAX = 8;
+// [local patch 2026-10-27 원장] 한글 화면의 세션 색: 시작 순서대로 하나씩 — 겹치지 않게(9개 넘으면 돌아감).
+const KO_SESSION_FG = [36, 35, 33, 32, 94, 95, 96, 93, 92];
+const KO_DOMAIN_RE = /@(gmail\.com|2117academy\.com)$/;
+/** 한글 화면용 「n초 전」. */
+function koAgo(/** @type {number} */ ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}초 전`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}분 전`;
+  const h = Math.round(m / 60);
+  return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
+}
 // How far apart two like requests may finish and still share an activity row.
 const ACTIVITY_FOLD_MS = 60_000;
 const SESSIONS_PANEL_ACCT_W = 32;
@@ -1013,7 +1025,11 @@ export class TUI {
     this.inputPrompt = '';
     this.inputBuf = '';
     this.inputCb = null;
-    this.inputSecret = false;    // a key is being typed: the footer echoes * for each char
+    this.inputSecret = false;
+    /** @type {Map<string, number>} 세션이 처음 보인 순서(한글 화면) */
+    this._sessOrder = new Map();
+    /** @type {Map<string, { ok: boolean, status: any, dur: string, at: number }>} 세션별 최근 요청(한글 화면) */
+    this._sessLast = new Map();    // a key is being typed: the footer echoes * for each char
     this.inputReturn = 'normal'; // mode to fall back to when an input is cancelled
     this.frame = 0;
     this.running = false;
@@ -1289,6 +1305,12 @@ export class TUI {
     // account and model (and, in the full format, method and path); anything
     // else is a row of its own. See _addLog.
     const ok = typeof info.status === 'number' && info.status >= 200 && info.status < 300;
+    if (this._koLayout()) {
+      if (sid) this._sessLast.set(sid, { ok, status: info.status, dur, at: Date.now() });
+      if (!ok) this._addLog(`${red(`✗ ${info.status}`)} ${this._sessionTag(sid)} → ${acct}`);
+      if (this.active.size === 0) this._retick();
+      return;
+    }
     const fold = ok
       ? JSON.stringify([compact ? 'c' : 'f', sid || '', acct, modelLabel(info.model, info.effort) || '', compact ? '' : `${info.method} ${info.path}`])
       : null;
@@ -1537,6 +1559,14 @@ export class TUI {
       this.selIdx = broken ?? order[0] ?? 0;
     }
     else if (k === 'g') { this.mode = 'settings'; this.setIdx = 0; this._loadSxBalance(); }
+    else if (k === 'h') { this._toggleHideSpent(); }
+    // [local patch 2026-10-27 원장] B: 계정 빼기(설정에서 지움 — 다시 쓰려면 다시 로그인). Enter 두 번으로 확인.
+    else if (k === 'b' && this.am.accounts.length > 0) {
+      const order = this._displayOrder();
+      const spent = order.find((/** @type {number} */ i) => this._isWeeklySpent(i));
+      this.mode = 'select'; this.selAction = 'removeKo'; this.selReturn = 'normal'; this._removeArmed = null;
+      this.selIdx = spent ?? order[0] ?? 0;
+    }
   }
 
   // Navigable rows on the settings screen, top to bottom. Both the renderer and
@@ -1956,6 +1986,15 @@ export class TUI {
     // dragged, and the row it marks travels with it.
     else if ((k === 'left' || k === 'h') && this.selAction === 'reorder') this._doMoveAccount(-1);
     else if ((k === 'right' || k === 'l') && this.selAction === 'reorder') this._doMoveAccount(+1);
+    else if (k === 'enter' && this.selAction === 'removeKo') {
+      if (this._removeArmed === this.selIdx) {
+        this._removeArmed = null;
+        this._doRemove(this.selIdx);
+        this.mode = this.selReturn;
+      } else {
+        this._removeArmed = this.selIdx;
+      }
+    }
     else if (k === 'enter') {
       if (this.selAction === 'switch') {
         this._doSwitchSelection();
@@ -2541,6 +2580,33 @@ export class TUI {
     if (this.running) this.render();
   }
 
+  // [local patch 2026-10-27 원장] H: 주간을 다 쓴 계정(주간 사용률이 전환 기준 이상)을 목록에서 숨기기/보이기.
+  async _toggleHideSpent() {
+    const prev = this.config.hideSpent;
+    const on = prev !== true;
+    this.config.hideSpent = on;
+    if (!await this._saveSetting('hide spent', () => { this.config.hideSpent = prev; })) return;
+    this._addLog(on ? '주간 다 쓴 계정 숨김' : '주간 다 쓴 계정 다시 보임');
+    if (this.running) this.render();
+  }
+
+  /** 주간(unified7d)이 전환 기준 이상인 계정. */
+  _isWeeklySpent(/** @type {number} */ i) {
+    const a = this.am.accounts[i];
+    const u = a?.quota?.unified7d;
+    if (u == null) return false;
+    const t = typeof this.am.thresholdFor === 'function'
+      ? this.am.thresholdFor('unified7d', a)
+      : (this.am.effectiveThreshold ?? this.config.switchThreshold ?? 0.98);
+    return u >= t;
+  }
+
+  /** 대시보드에 그릴 줄: H 로 숨김을 켰으면 주간 다 쓴 계정을 뺀다(선택 화면 등은 전부). */
+  _visibleRows(/** @type {number[]} */ indices) {
+    if (this.config?.hideSpent !== true || this.mode !== 'normal') return indices;
+    return indices.filter(i => !this._isWeeklySpent(i));
+  }
+
   async _toggleQuotaBarPercent() {
     // Absent means off (it is opt-in), so the first toggle from a config that
     // predates the key has to write `true` — hence the comparison rather than a
@@ -2922,7 +2988,9 @@ export class TUI {
     // ▼ marks a dashboard that lost contact with the server it polls (attach
     // mode): what is on screen is the last snapshot, not the current state.
     const live = this.am.connected === false ? red('▼') : green('▲');
-    const right = `${sessStr}Port ${port} ${live} `;
+    const right = this._koLayout()
+      ? `${sess.active || sess.known ? `세션 ${sess.active}  ` : ''}포트 ${port} ${live} `
+      : `${sessStr}Port ${port} ${live} `;
     // In attach mode the dashboard names the server's build, not this process's,
     // so the account manager's answer wins. It arrives sanitized (applyStatus)
     // and starts empty, which keeps the label hidden until the first poll rather
@@ -2945,7 +3013,7 @@ export class TUI {
       : left + ' '.repeat(Math.max(1, W - lw - rw)) + right);
     lines.push(' ' + dim('─'.repeat(W - 2)));
 
-    const footerH = 2;
+    const footerH = this._koLayout() && this.mode === 'normal' && !this.remote ? 3 : 2;
     // While a prompt is open (mode 'input') keep showing the screen it was
     // launched from, so e.g. adding a route stays on the routes screen rather
     // than flashing back to the main dashboard with just the footer prompt.
@@ -2976,6 +3044,8 @@ export class TUI {
       this._renderFocus(lines, W, H - footerH);
     } else if (view === 'cleanup') {
       this._renderCleanup(lines, W);
+    } else if ((view === 'normal' || view === 'select') && this._koLayout() && this.am.accounts.length > 0) {
+      this._renderKo(lines, W, H - footerH);
     } else {
     // ── Accounts, or the login panel in their place. The activity pane stays
     // under the panel: the sign-in's own progress lines land there.
@@ -2994,7 +3064,7 @@ export class TUI {
       // Two providers, two panes; the titles take the spacer line. One column when
       // the panes cannot draw every bar the rows have.
       const current = this._currentRows();
-      const groups = this._providerGroups();
+      const groups = this._providerGroups().map(g => ({ ...g, indices: this._visibleRows(g.indices) }));
       const split = groups.length === 2 ? this._splitLayout(groups, W) : null;
       // The sessions each account is carrying: their colours run under its
       // name. The sessions themselves are listed in their own panel below.
@@ -3018,7 +3088,7 @@ export class TUI {
         lines.push(this._fleetLine(W, groups));
         const host = this._hostLine(W);
         if (host) lines.push(host);
-        const order = this._displayOrder();
+        const order = this._visibleRows(this._displayOrder());
         const layout = this._listLayout(order, W);
         lines.push(...this._renderRows(order, layout, current, sessionRows));
       }
@@ -3085,7 +3155,8 @@ export class TUI {
 
     // ── Footer
     lines.push(' ' + dim('─'.repeat(W - 2)));
-    lines.push(this._renderFooter());
+    if (footerH === 3) lines.push(...this._renderFooterKo());
+    else lines.push(this._renderFooter());
 
     // Write buffer
     let buf = `${ESC}H`;
@@ -4082,7 +4153,8 @@ export class TUI {
     const focusName = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
     const isFocus = !!focusName && a.name === focusName;
     const sel = !isSel ? (isFocus ? orange('◎') : ' ') : cursorAt ? dim('>') : cyan('>');
-    const cur = isCur ? green('►') : ' ';
+    // [local patch 2026-10-27 원장] 초록 ► (현재 계정) 표시는 설정 currentArrow:false 면 뺀다 — 세션마다 계정이 달라 의미가 없다. 칸은 유지.
+    const cur = isCur && this.config?.currentArrow !== false ? green('►') : ' ';
     // The column before a family bar's marker: the cursor when it moved here, else the separator space.
     const famLead = fam => (cursorAt === fam ? cyan('>') : ' ');
 
@@ -4788,12 +4860,163 @@ export class TUI {
     }
   }
 
+  // ── [local patch 2026-10-27 원장] 한글 화면(설정 koLayout: true) ─────────────
+  // 막대 이름은 머리글 한 줄(5시간 · 일주일 · Fable · 구독), 정상 계정엔 상태 글자 없음,
+  // 세션은 시작 순 고정 + 최근 요청 칸, 아래는 알림(요청 줄 없이 전환·오류만).
+
+  _koLayout() {
+    return this.config?.koLayout === true;
+  }
+
+  /** 세션이 처음 보인 순서(번호)와 그 순서대로의 색. 서버를 다시 켜면 처음부터. */
+  _sessSeq(/** @type {string} */ sid) {
+    let n = this._sessOrder.get(sid);
+    if (n == null) { n = this._sessOrder.size; this._sessOrder.set(sid, n); }
+    return n;
+  }
+
+  _sessColor(/** @type {string} */ sid) {
+    return KO_SESSION_FG[this._sessSeq(sid) % KO_SESSION_FG.length];
+  }
+
+  /** 계정 상태 분류: ok · rest(5시간/주간 기준 이상) · error · off. */
+  _koState(/** @type {any} */ a) {
+    if (a.disabled) return 'off';
+    if (a.status === 'error') return 'error';
+    const q = a.quota || {};
+    const th = (/** @type {string} */ b) => (typeof this.am.thresholdFor === 'function' ? this.am.thresholdFor(b, a) : (this.config.switchThreshold ?? 0.98));
+    if ((q.unified5h != null && q.unified5h >= th('unified5h')) || (q.unified7d != null && q.unified7d >= th('unified7d'))) return 'rest';
+    return 'ok';
+  }
+
+  /** @param {string[]} lines @param {number} W @param {number} bottom */
+  _renderKo(lines, W, bottom) {
+    const accts = this.am.accounts;
+    const states = accts.map((/** @type {any} */ a) => this._koState(a));
+    const cnt = (/** @type {string} */ k) => states.filter((/** @type {string} */ x) => x === k).length;
+    const okN = cnt('ok'), restN = cnt('rest'), errN = cnt('error'), offN = cnt('off');
+    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}`;
+    const focus = this._focusSeg();
+    lines.push(focus && vw(summary) + vw(focus) + 3 <= W ? summary + ' '.repeat(W - vw(summary) - vw(focus) - 1) + focus : summary);
+    const host = this._hostLine(W);
+    if (host) lines.push(host);
+    lines.push(' ' + dim('─'.repeat(W - 2)));
+
+    // 세션 목록(시작 순)과 계정별 세션 점
+    const items = this._sessionItems();
+    for (const s of items) this._sessSeq(s.id);
+    items.sort((/** @type {any} */ x, /** @type {any} */ y) => this._sessSeq(x.id) - this._sessSeq(y.id));
+    /** @type {Map<number, any[]>} */
+    const byAcct = new Map();
+    for (const s of items) {
+      if (s.account == null || !s.active) continue;
+      const l = byAcct.get(s.account);
+      if (l) l.push(s); else byAcct.set(s.account, [s]);
+    }
+
+    // 계정 표
+    const order = this._visibleRows(this._displayOrder());
+    const BW = 16;
+    const nameW = Math.min(24, Math.max(10, ...order.map((/** @type {number} */ i) => vw(accts[i].name.replace(KO_DOMAIN_RE, '')))));
+    const anyFable = order.some((/** @type {number} */ i) => accts[i].quota?.unified7dFable != null);
+    const cols = ['5시간', '일주일', ...(anyFable ? ['Fable'] : [])];
+    // 세션 점은 5시간 막대 바로 왼쪽(막히는 기준이 5시간이라 — 원장 2026-10-27). 최대 4개, 넘으면 +N.
+    const DOT_MAX = 4;
+    const dotsW = Math.min(DOT_MAX + 2, Math.max(0, ...order.map((/** @type {number} */ i) => {
+      const n = (byAcct.get(i) || []).length;
+      return n > DOT_MAX ? DOT_MAX + 2 : n;
+    })));
+    const dotCol = dotsW ? dotsW + 1 : 0;
+    lines.push(`  ${' '.repeat(nameW)}  ${' '.repeat(dotCol)}${cols.map(c => dim(rpad(c, BW))).join('  ')}  ${dim('구독')}`);
+    const th = (/** @type {any} */ a, /** @type {string} */ b) => (typeof this.am.thresholdFor === 'function' ? this.am.thresholdFor(b, a) : null);
+    const pctOn = true;
+    for (const i of order) {
+      const a = accts[i];
+      const q = a.quota || {};
+      const isSel = this.mode === 'select' && i === this.selIdx;
+      const focusName = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
+      const mark = isSel ? cyan('>') : (focusName && a.name === focusName ? orange('◎') : ' ');
+      const nm = rpad(truncate(a.name.replace(KO_DOMAIN_RE, ''), nameW), nameW);
+      const st = states[i];
+      const nameTxt = isSel ? bold(nm) : st === 'off' ? gray(nm) : nm;
+      let body;
+      if (st === 'error') body = red('⚠ 다시 로그인 필요 (L)');
+      else if (st === 'off') body = gray('꺼 둠 (D 로 켜기)');
+      else {
+        const cells = [
+          bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn),
+          bar(q.unified7d, BW, q.unified7dReset, SEVEN_DAY_MS, th(a, 'unified7d'), pctOn),
+        ];
+        if (anyFable) cells.push(q.unified7dFable != null
+          ? bar(q.unified7dFable, BW, q.unified7dFableReset, SEVEN_DAY_MS, th(a, 'unified7dFable'), pctOn)
+          : dim(rpad(' '.repeat(Math.floor(BW / 2)) + '─', BW)));
+        body = cells.join('  ');
+      }
+      const subRaw = this._subscriptionTail(a, true).replace(/^ · 구독 /, '');
+      const subT = subscriptionText(a?.subscription ?? (a?.subscriptionCreatedAt || a?.renewDate ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus, renewDate: a.renewDate } : null));
+      const sub = !subRaw ? '' : subT && subT.level >= 2 ? red(subRaw) : subT && subT.level === 1 ? orange(subRaw) : dim(subRaw);
+      const bodyW = st === 'ok' || st === 'rest' ? cols.length * BW + (cols.length - 1) * 2 : vw(strip(body));
+      const pad = ' '.repeat(Math.max(0, cols.length * BW + (cols.length - 1) * 2 - bodyW));
+      const mine = byAcct.get(i) || [];
+      const dots = mine.slice(0, DOT_MAX).map((/** @type {any} */ s) => fg(this._sessColor(s.id), '●')).join('')
+        + (mine.length > DOT_MAX ? dim(`+${mine.length - DOT_MAX}`) : '');
+      const dotCell = dotCol ? `${' '.repeat(Math.max(0, dotsW - vw(strip(dots))))}${dots} ` : '';
+      lines.push(truncate(`${mark} ${nameTxt}  ${dotCell}${body}${pad}  ${sub}`, W));
+    }
+    const hidden = accts.length - order.length;
+    if (hidden > 0) lines.push(dim(`  … 주간 다 쓴 계정 ${hidden}개 숨김 (H 로 보이기)`));
+    if (this.mode !== 'normal') return;
+
+    // 세션 + 최근 요청
+    lines.push(' ' + dim('─'.repeat(W - 2)));
+    const shown = items.slice(0, SESSIONS_PANEL_MAX);
+    lines.push(` ${bold('세션')} ${dim('(시작 순)')}`);
+    const now = Date.now();
+    /** @type {Map<string, any>} */
+    const live = new Map();
+    for (const [, r] of this.active) if (r.sessionId) {
+      const prev = live.get(r.sessionId);
+      if (!prev || r.started < prev.started) live.set(r.sessionId, r);
+    }
+    const labelW = Math.min(22, Math.max(6, ...shown.map((/** @type {any} */ s) => vw(this._sessionLabel(s)))));
+    const acctW = Math.min(16, Math.max(6, ...shown.map((/** @type {any} */ s) => vw(this._sessionAccountName(s).replace(KO_DOMAIN_RE, '')))));
+    for (const s of shown) {
+      const c = this._sessColor(s.id);
+      const dot = fg(c, s.active ? '●' : '○');
+      const label = rpad(truncate(this._sessionLabel(s), labelW), labelW);
+      const acct = rpad(truncate(this._sessionAccountName(s).replace(KO_DOMAIN_RE, ''), acctW), acctW);
+      const model = rpad(truncate(modelTag(s.model), 6), 6);
+      const r = live.get(s.id);
+      let last;
+      if (r) last = `${cyan(SPINNER[this.frame])} 진행 중 ${((now - r.started) / 1000).toFixed(1)}s`;
+      else {
+        const L = this._sessLast.get(s.id);
+        last = L ? `${L.ok ? green('✓') : red(`✗ ${L.status}`)} ${L.dur}s · ${koAgo(now - L.at)}` : dim(koAgo(now - s.lastSeen));
+      }
+      lines.push(truncate(` ${dot} ${s.active ? fg(c, label) : dim(label)}  → ${acct}  ${dim(model)}  ${last}`, W));
+    }
+    if (items.length > shown.length) lines.push(dim(`   … 세션 ${items.length - shown.length}개 더`));
+
+    // 알림(요청 줄 없이)
+    lines.push(' ' + dim('─'.repeat(W - 2)));
+    lines.push(` ${bold('알림')}`);
+    const space = Math.max(0, bottom - lines.length);
+    for (let k = 0; k < space && k < this.log.length; k++) lines.push(`   ${gray(this.log[k].t)}  ${this.log[k].msg}`);
+  }
+
+  _renderFooterKo() {
+    const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
+    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), k('D', '끄기/켜기'), ...(this.loginAccount ? [k('L', '로그인')] : []), k('P', '사용량조회')];
+    const line2 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), k('B', '계정빼기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('R', '새로고침'), k('G', '설정'), k('Q', '종료')];
+    return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`];
+  }
+
   _renderFooter() {
     switch (this.mode) {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'cleanup':
         return this.cleanup?.stage === 'list'
           ? ` ${bold('y')} 모두 끄기  ${bold('Esc')} 닫기`
@@ -4833,6 +5056,12 @@ export class TUI {
         }
         if (this.selAction === 'login') {
           return ` ${dim('↑↓')} select  ${bold('Enter')} sign in via browser  ${bold('Esc')} cancel`;
+        }
+        if (this.selAction === 'removeKo') {
+          const nm = this.am.accounts[this.selIdx]?.name ?? '';
+          return this._removeArmed === this.selIdx
+            ? ` ${red(`「${nm}」을 정말 뺄까요? 다시 쓰려면 다시 로그인해야 합니다.`)}  ${bold('Enter')} 빼기  ${bold('Esc')} 취소`
+            : ` ${dim('↑↓')} 고르기  ${bold('Enter')} 이 계정 빼기  ${bold('Esc')} 취소`;
         }
         const act = this.selAction === 'toggle' ? 'enable/disable'
           : this.selAction === 'routing' ? 'set its proxy' : 'remove';

@@ -671,6 +671,9 @@ async function serverCommand() {
     config.messageThreads = fleetThreads;
     // Read by the TUI on every frame, so a hand edit lands on the next reload.
     config.quotaBarPercent = diskConfig.quotaBarPercent === true;
+    config.hideSpent = diskConfig.hideSpent === true;
+    config.currentArrow = diskConfig.currentArrow !== false;
+    config.koLayout = diskConfig.koLayout === true;
     // The activity row format, read per row the same way; 'full' unless 'compact'.
     config.activityFormat = diskConfig.activityFormat === 'compact' ? 'compact' : 'full';
     // Folding like requests into one activity row; on unless set to false.
@@ -780,6 +783,7 @@ async function serverCommand() {
         // the edit never reached disk and was silently undone by the next start.
         if (config.eventLogging != null) diskConfig.eventLogging = config.eventLogging;
         if (config.quotaBarPercent != null) diskConfig.quotaBarPercent = config.quotaBarPercent;
+        if (config.hideSpent != null) diskConfig.hideSpent = config.hideSpent;
         if (config.activityFormat != null) diskConfig.activityFormat = config.activityFormat;
         if (config.activityFold != null) diskConfig.activityFold = config.activityFold;
         if (config.sessionRows != null) diskConfig.sessionRows = config.sessionRows;
