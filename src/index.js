@@ -123,6 +123,7 @@ import {
   setAccountDisabled,
   setAccountPriority,
   renameAccount,
+  setFocusAccount,
 } from './config-ops.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
@@ -242,6 +243,10 @@ switch (command) {
     break;
   case 'renew':
     await renewCommand();
+    process.exit(0);
+    break;
+  case 'focus':
+    await focusCommand();
     process.exit(0);
     break;
   case 'rename':
@@ -409,6 +414,8 @@ async function serverCommand() {
     process.exit(1);
   }
   const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions, sessionAffinity: config.sessionAffinity !== false });
+  // [local patch 2026-10-27 원장] 집중 계정: 시작할 때도, 설정을 다시 읽을 때도 같은 규칙으로 적용.
+  accountManager.setFocusAccount(config.focusAccount);
   // Names the activity log's session column from Claude Code's own on-disk
   // session titles. Built whether or not the TUI runs, so a reload has one
   // object to reconfigure.
@@ -619,6 +626,20 @@ async function serverCommand() {
     // says false, read per selection off the manager.
     config.sessionAffinity = diskConfig.sessionAffinity !== false;
     accountManager.setSessionAffinity(config.sessionAffinity);
+    // [local patch 2026-10-27 원장] 집중 계정(`octopus focus`, TUI 의 f 키). 설정에서 그 계정이
+    // 지워졌으면(이름이 목록에 없음) 집중도 해제하고 디스크의 값도 지운다.
+    {
+      const want = typeof diskConfig.focusAccount === 'string' && diskConfig.focusAccount ? diskConfig.focusAccount : null;
+      if (want && !diskConfig.accounts.some((/** @type {any} */ a) => a?.name === want)) {
+        delete config.focusAccount;
+        accountManager.setFocusAccount(null);
+        console.log(`[Octopus] Focus account "${want}" is no longer in the config — focus cleared`);
+        atomicConfigUpdate((/** @type {any} */ d) => { if (d.focusAccount === want) delete d.focusAccount; }).catch(() => {});
+      } else {
+        if (want) config.focusAccount = want; else delete config.focusAccount;
+        accountManager.setFocusAccount(want);
+      }
+    }
     // Pick up a switchThreshold change the same way (teamclaude threshold, the
     // TUI settings screen, or a hand edit). thresholdFor() reads it off the
     // manager on every decision, so assigning it is the whole application —
@@ -773,6 +794,15 @@ async function serverCommand() {
         if (config.routes != null) diskConfig.routes = config.routes;
       }),
       syncAccounts: reloadAccounts,
+      // [local patch 2026-10-27 원장] `f` key: 집중 계정 지정/해제(null). 우선순위와 같은 설정 잠금
+      // (atomicConfigUpdate)으로 쓰고, 바로 다시 읽어 서버에 적용한다.
+      setFocusAccount: async (/** @type {string|null} */ name) => {
+        /** @type {{ name: string|null }|undefined} */
+        let result;
+        await atomicConfigUpdate((/** @type {any} */ diskConfig) => { result = setFocusAccount(diskConfig, name); });
+        await reloadAccounts();
+        return result;
+      },
       // `l` key: sign in the chosen account's provider from inside the running
       // server. Same upsert the CLI uses — the account the BROWSER signed in as
       // is the one that gets the tokens, whichever row was picked — then an
@@ -2824,6 +2854,7 @@ async function removeCommand() {
   }
 
   config.accounts.splice(config.accounts.indexOf(account), 1);
+  if (config.focusAccount === account.name) delete config.focusAccount; // [local patch 2026-10-27] 집중 계정이 지워지면 집중도 해제
   await saveConfig(config);
   console.log(`Removed account "${account.name}"`);
   // The tombstone first, then the server: told of the removal, it finds the
@@ -2964,6 +2995,43 @@ async function renewCommand() {
     const r = nextRenewalOnDate(value);
     console.log(`Set the renewal date of "${account.name}" to ${value} (next renewal in ${r?.daysLeft} days).`);
   }
+  await notifyRunningServer(config);
+}
+
+// ── focus ───────────────────────────────────────────────────
+
+// [local patch 2026-10-27 원장] 집중 계정: 구독 마지막 날 한 계정에 몰아서 쓰려고 지정한다.
+// 지정하면 새 세션·failover·이미 다른 계정에 고정된 세션도 그 계정이 먼저(한도에 걸린 동안만 다른 계정).
+async function focusCommand() {
+  const config = await loadOrCreateConfig();
+  const name = args[1];
+
+  if (!name) {
+    const cur = config.focusAccount;
+    const known = cur && config.accounts.some((/** @type {any} */ a) => a.name === cur);
+    console.log(known ? `Focus account: ${cur}` : 'Focus account: none');
+    return;
+  }
+
+  if (name === 'off') {
+    delete config.focusAccount;
+    await saveConfig(config);
+    console.log('Focus account cleared (normal rotation rules apply).');
+    await notifyRunningServer(config);
+    return;
+  }
+
+  let account = resolveAccount(config.accounts, name, argValue('--org'));
+  if (!account && /^\d+$/.test(name)) account = config.accounts[Number(name) - 1] || null;
+  if (!account) {
+    console.error(`Account "${name}" not found`);
+    console.error('Usage: octopus focus <account-name|email|number>   |   octopus focus off   |   octopus focus');
+    process.exit(1);
+  }
+
+  config.focusAccount = account.name;
+  await saveConfig(config);
+  console.log(`Focus account set to "${account.name}" — new and pinned sessions go there while it can serve.`);
   await notifyRunningServer(config);
 }
 
@@ -3140,6 +3208,8 @@ Commands:
   disable <name>      Temporarily exclude an account from rotation
   enable <name>       Re-enable a disabled account (also clears a stuck error)
   priority <name> <n> Set rotation priority (lower = preferred; --first/--last)
+  focus [<name>|off]  Focus account: send everything there while it can serve
+                      (no argument shows the current one)
   rename <name> <new> Rename an account, updating the routes that list it
   route [list|add|rm] Per-model routing: pin model globs to specific accounts
                       (add <name> --match "<glob>" [--accounts "<name>"] [--bucket <b>])

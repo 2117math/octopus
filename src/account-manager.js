@@ -605,6 +605,11 @@ export class AccountManager {
     // pin of its own follows its session's siblings (see _selectForSession).
     // Read per selection, so the setter is the whole application on reload.
     this.sessionAffinity = sessionAffinity === true;
+    // [local patch 2026-10-27 원장] 집중 계정(config `focusAccount`, 계정 이름). 있으면 새 세션·
+    // failover·고정 세션 모두 이 계정이 먼저다(쓸 수 없는 동안만 다른 계정). setFocusAccount 로 적용.
+    /** @type {string|null} */
+    this.focusAccountName = null;
+    this._focusAway = false;
     // Optional session-title lookup for the rebalance log line; index.js points
     // it at the SessionTitles store. Null names a session by its id.
     /** @type {((id: string) => string|null)|null} */
@@ -1563,6 +1568,12 @@ export class AccountManager {
     // The empty set marks this call as a request's, since a poll hands none.
     // Allocated fresh: a set handed out once is one a later reader could add to.
     this.refreshExpiredQuotas(model, this.expiryRouting.enabled ? (exclude ?? new Set()) : exclude, advisorModel);
+    // [local patch 2026-10-27 원장] 집중 계정: 수동 route 고정이 아니면 세션 고정·분배보다 먼저.
+    // 이미 다른 계정에 고정된 세션도 여기서 집중 계정으로 옮겨진다(서빙 계정으로 고정이 다시 기록됨).
+    if (this.focusAccountName && !this._pinnedAccountForModel(model, advisorModel)) {
+      const focus = this._focusPick(exclude, model, advisorModel);
+      if (focus) return focus;
+    }
     // Session-affinity distribution (opt-in): keep a conversation on its pinned
     // account for cache reuse, and route a new one to the least-loaded account.
     // The unit is the conversation rather than the client session because one
@@ -2050,7 +2061,9 @@ export class AccountManager {
       const inFlight = account.inFlight || 0;
       const pressure = pressures[i];
       const reset = this._rankedReset(account, model);
-      const key = [priority, heldOff, reserve, hot5h, full, tier, sessions, used, inFlight, pressure, reset];
+      // [local patch 2026-10-27 원장] 집중 계정이 가장 앞(그다음이 priority).
+      const focus = account.name === this.focusAccountName ? 0 : 1;
+      const key = [focus, priority, heldOff, reserve, hot5h, full, tier, sessions, used, inFlight, pressure, reset];
       // Lexicographic: the first differing key decides, a full tie keeps the
       // earlier candidate.
       let less = bestKey === null;
@@ -2944,6 +2957,50 @@ export class AccountManager {
   /** [local patch] Turn session affinity on or off (config `sessionAffinity`). */
   setSessionAffinity(enabled) {
     this.sessionAffinity = enabled === true;
+  }
+
+  /** [local patch 2026-10-27 원장] 집중 계정 지정/해제(설정 `focusAccount`, 계정 이름). 설정을 다시 읽을
+   *  때마다 불러도 안전하다. 이름이 바뀌면 「넘어감」 상태를 새로 센다.
+   *  @param {unknown} name */
+  setFocusAccount(name) {
+    const next = typeof name === 'string' && name ? name : null;
+    if (next !== this.focusAccountName) this._focusAway = false;
+    this.focusAccountName = next;
+  }
+
+  /** The focus account's running account object, or null (none set, or no such account). */
+  _focusAccount() {
+    const name = this.focusAccountName;
+    if (!name) return null;
+    return this.accounts.find(a => a.name === name) || null;
+  }
+
+  /** 표시용 — 집중 계정 이름과 상태('on' = 지금 쓸 수 있음 · 'away' = 한도 등으로 잠시 다른 계정). */
+  focusInfo() {
+    const f = this._focusAccount();
+    if (!f) return null;
+    return { name: f.name, state: this._isAvailable(f) ? 'on' : 'away' };
+  }
+
+  /**
+   * [local patch 2026-10-27 원장] 집중 계정이 이 요청을 받을 수 있으면 그 계정. 한 계정 2개 제한(full)·
+   * tier·reserve 는 적용하지 않는다. `_isAvailable` 이 거짓(5h·주간 한도·rate limit·error·disabled)이면
+   * null — 기존 규칙대로 다른 계정이 이어받고, 다시 쓸 수 있게 되면 다음 요청부터 돌아온다.
+   * 넘어감·돌아옴은 활동 로그에 한 줄씩(모델과 무관한 가용 여부로 판단해 모델별로 깜빡이지 않는다).
+   */
+  _focusPick(exclude, model, advisorModel) {
+    const f = this._focusAccount();
+    if (!f) return null;
+    const up = this._isAvailable(f);
+    if (!up && !this._focusAway) {
+      this._focusAway = true;
+      console.log(`[Octopus] Focus account "${safeLine(f.name, 64)}" is out of reach (${this.unavailableReason(f)}) — other accounts take over`);
+    } else if (up && this._focusAway) {
+      this._focusAway = false;
+      console.log(`[Octopus] Focus account "${safeLine(f.name, 64)}" is back — new requests return to it`);
+    }
+    if (exclude?.has(f.index) || !this._isAvailable(f, model, advisorModel)) return null;
+    return f;
   }
 
   setRebalance(setting) {
@@ -5533,6 +5590,9 @@ export class AccountManager {
       // Null when the last advisor request found no difference between them.
       advisorEligibility: this.advisorEligibility,
       advisorNarrowing: this._advisorNarrowing ? { ...this._advisorNarrowing } : null,
+      // [local patch 2026-10-27 원장] 집중 계정 — 이름과 상태('on'|'away'), 없으면 null.
+      focusAccount: this._focusAccount()?.name ?? null,
+      focusState: this.focusInfo()?.state ?? null,
       routes: this.getRoutes(),
       sessions: { ...sessions, distribute: this.distributeSessions, mode: this.distributionMode, draining: this.drainingCount() },
       // Empty outside adaptive mode, so the renderer needs no mode check of its

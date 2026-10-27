@@ -883,6 +883,8 @@ export class TUI {
     remote = false, applySwitch = null,
     // Attach mode's `m`: the move is a request to the server, like a switch.
     applySessionMove = null,
+    // [local patch 2026-10-27 원장] `f` 집중 계정: 설정 저장 + 서버 반영(index.js). 없으면 메모리에만 적용.
+    setFocusAccount = null,
     // Injectable so the import path can be exercised without a real credentials
     // file or a live profile call.
     readCredentials = importCredentials, readProfile = fetchProfile,
@@ -907,6 +909,7 @@ export class TUI {
     this.remote = remote;
     this.applySwitch = applySwitch;
     this.applySessionMove = applySessionMove;
+    this.setFocusAccount = setFocusAccount;
     this.config = config;
     this.saveConfig = saveConfig;
     this.syncAccounts = syncAccounts;
@@ -940,6 +943,7 @@ export class TUI {
     this.selRoute = null;    // in switch mode: null = global default, else a getRoutes() entry to pin
     this.selReturn = 'normal'; // mode to fall back to when select mode closes
     this.move = null;        // the `m` picker while it is open (see _openMove)
+    this.focus = null;       // 「집중 계정」 고르기 창 상태(see _openFocus)
     this.cleanup = null;     // 「안 쓰는 작업 정리」 창 상태(see _openCleanup)
     this._leftovers = null;  // 마지막 조회의 { count, memMB } — Host 줄 안내용
     /** @type {ReturnType<typeof setInterval> | null} */
@@ -1434,6 +1438,7 @@ export class TUI {
       case 'blocklist': this._keyBlocklist(k); break;
       case 'login': this._keyLogin(k); break;
       case 'move': this._keyMove(k); break;
+      case 'focus': this._keyFocus(k); break;
       case 'cleanup': this._keyCleanup(k); break;
     }
     this.render();
@@ -1448,7 +1453,10 @@ export class TUI {
     }
     else if (k === 'R') { this._doSync(); }
     // Available in attach mode too: there the move is a request to the server.
-    else if (k === 'm' && this.am.accounts.length > 0) { this._openMove(); }
+    // [local patch 2026-10-27 원장] 대문자도 받는다(Shift 를 눌러 안 되던 일).
+    else if ((k === 'm' || k === 'M') && this.am.accounts.length > 0) { this._openMove(); }
+    // 집중 계정은 서버 설정이라 attach 모드에서는 안내만.
+    else if ((k === 'f' || k === 'F') && this.remote) { this._addLog('집중 계정은 서버 화면(octopus server)에서 지정하세요'); }
     // The keys below all edit local state or call out to Anthropic, neither of
     // which attach mode can do — the server owns both.
     else if (this.remote) { /* nothing else is available here */ }
@@ -1456,6 +1464,7 @@ export class TUI {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
     else if (k === 'p' && this.am.accounts.length > 0) { this._doProbe(); }
+    else if ((k === 'f' || k === 'F') && this.am.accounts.length > 0) { this._openFocus(); }
     else if (k === 'x' && this._cleanupAvailable()) { this._openCleanup(); }
     // Re-login: an OAuth account whose refresh token upstream has rejected stays
     // in 'error' until someone signs in again, and that someone is usually
@@ -2903,6 +2912,8 @@ export class TUI {
       this._renderBlocklist(lines);
     } else if (view === 'move') {
       this._renderMove(lines, W, H - footerH);
+    } else if (view === 'focus') {
+      this._renderFocus(lines, W, H - footerH);
     } else if (view === 'cleanup') {
       this._renderCleanup(lines, W);
     } else {
@@ -2930,6 +2941,8 @@ export class TUI {
       const sessionRows = this._sessionRowsByAccount();
       if (split) {
         const [a, b] = groups;
+        const focusSeg = this._focusSeg();
+        if (focusSeg) lines.push(` ${focusSeg}`);
         const host = this._hostLine(W);
         if (host) lines.push(host);
         lines.push(paneTitle(PROVIDERS[a.provider].label, split.leftW) + dim(PANE_GUTTER) + paneTitle(PROVIDERS[b.provider].label, split.rightW));
@@ -3460,6 +3473,96 @@ export class TUI {
     }
   }
 
+  /** [local patch 2026-10-27 원장] `f`: 집중 계정 고르기 창. 맨 위 「집중 끄기」 + 계정 줄(move 화면과 같은 5h·주 %·구독 꼬리). */
+  _openFocus() {
+    const cur = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
+    const rows = [{ off: true }, ...this._displayOrder().map((/** @type {number} */ idx) => {
+      const a = this.am.accounts[idx];
+      const weekly = this._moveWeekly(a, null);
+      return {
+        idx,
+        name: a?.name,
+        ok: this._moveAvailable(a, null, weekly),
+        current: !!cur && a?.name === cur,
+        ses: a?.quota?.unified5h ?? null,
+        wk: weekly,
+        wkReset: this._moveWeeklyReset(a, null),
+      };
+    })];
+    const at = rows.findIndex(r => r.current);
+    this.focus = { rows, idx: at >= 0 ? at : (rows.length > 1 ? 1 : 0) };
+    this.mode = 'focus';
+  }
+
+  _closeFocus() {
+    this.focus = null;
+    this.mode = 'normal';
+  }
+
+  _keyFocus(/** @type {string} */ k) {
+    const f = this.focus;
+    if (!f) { this.mode = 'normal'; return; }
+    if (k === 'esc' || k === 'q') { this._closeFocus(); return; }
+    if (k === 'up' || k === 'k') f.idx = Math.max(0, f.idx - 1);
+    else if (k === 'down' || k === 'j') f.idx = Math.min(f.rows.length - 1, f.idx + 1);
+    else if (k === 'enter') {
+      const row = f.rows[f.idx];
+      // 「집중 끄기」 줄, 또는 이미 집중 중인 계정을 다시 고르면 해제.
+      this._doFocus(!row || row.off || row.current ? null : row.name);
+    }
+  }
+
+  /** 집중 계정을 저장하고(우선순위와 같은 설정 잠금) 서버에 적용한다. null 이면 해제. */
+  async _doFocus(/** @type {string|null} */ name) {
+    this._closeFocus();
+    try {
+      if (this.setFocusAccount) await this.setFocusAccount(name);
+      else {
+        // 저장 수단이 없는 구성(시험 등)은 메모리에만.
+        if (name) this.config.focusAccount = name; else delete this.config.focusAccount;
+        this.am.setFocusAccount?.(name);
+      }
+    } catch (/** @type {any} */ e) {
+      this._addLog(`집중 계정 설정 실패: ${safeLine(e?.message || String(e), 120)}`);
+      if (this.running) this.render();
+      return;
+    }
+    this._addLog(name ? `집중 계정: ${safeLine(name, 64)} — 다음 요청부터 이 계정으로 몰립니다` : '집중 계정을 껐습니다 — 원래 배정 규칙으로 돌아갑니다');
+    if (this.running) this.render();
+  }
+
+  _renderFocus(/** @type {string[]} */ lines, /** @type {number} */ W, /** @type {number} */ bottom) {
+    const f = this.focus;
+    if (!f) return;
+    lines.push('');
+    lines.push(bold('  집중 계정') + dim('  — 고른 계정으로 새 세션·고정 세션이 모두 몰립니다 (한도에 걸린 동안만 다른 계정)'));
+    lines.push('');
+    const accts = f.rows.filter((/** @type {any} */ r) => !r.off);
+    const nameW = Math.min(32, Math.max(1, ...accts.map((/** @type {any} */ r) => vw(safeLine(r.name ?? '?', 64)))));
+    const cell = (/** @type {number} */ v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : '—').padStart(4);
+    f.rows.forEach((/** @type {any} */ r, /** @type {number} */ i) => {
+      const cur = i === f.idx;
+      const mark = cur ? cyan('▸') : ' ';
+      if (r.off) {
+        lines.push(`   ${mark} ${cur ? bold('집중 끄기') : '집중 끄기'}${dim('  — 원래 배정 규칙')}`);
+        return;
+      }
+      const warn = (/** @type {number} */ v, /** @type {number} */ limit, /** @type {string} */ text) => {
+        if (!Number.isFinite(v) || v < limit) return text;
+        const colored = barColor(v) === BAR_RED ? red(text) : orange(text);
+        return cur ? `${colored}${BOLD}` : colored;
+      };
+      const untilReset = Number.isFinite(r.wkReset) ? r.wkReset - Date.now() : NaN;
+      const tail = untilReset > 0 && untilReset <= 24 * 3600_000 ? ` · 리셋 ${Math.max(1, Math.ceil(untilReset / 3600_000))}h` : '';
+      const subRaw = this._subscriptionTail(this.am.accounts[r.idx]);
+      const subTail = subRaw && cur ? `${subRaw}${BOLD}` : subRaw;
+      const name = rpad(truncate(safeLine(r.name ?? '?', 64), nameW), nameW);
+      const body = `${name}  5h ${warn(r.ses, 0.8, cell(r.ses))} · 주 ${warn(r.wk, 0.9, cell(r.wk))}${tail}${subTail}`;
+      const note = r.current ? orange('  ◎ 집중 중 (다시 고르면 해제)') : !r.ok ? dim('  (지금은 쓸 수 없음 — 한도 등)') : '';
+      lines.push(`   ${mark} ${cur ? bold(body) : body}${note}`);
+    });
+  }
+
   /** Open the session picker: every known session, newest first, as it stood
    *  when the key was pressed, so the cursor does not chase a list reordering
    *  under it with every request. */
@@ -3813,9 +3916,13 @@ export class TUI {
    * @returns {string}
    */
   _fleetLine(W, groups) {
-    if (groups.length !== 1) return '';
+    // [local patch 2026-10-27 원장] 집중 계정이 있으면 이 줄 맨 앞에 `🎯 집중 …`. 요약이 없는 구성
+    // (계정 2개 미만·두 공급자)에서도 집중 표시만은 남긴다.
+    const focusSeg = this._focusSeg();
+    const only = focusSeg ? ` ${focusSeg}` : '';
+    if (groups.length !== 1) return only;
     const accts = this.am.accounts.filter((/** @type {any} */ a) => a && !a.disabled && isSubscriptionAccount(a));
-    if (accts.length < 2) return '';
+    if (accts.length < 2) return only;
     const num = (/** @type {unknown} */ v) => typeof v === 'number' && Number.isFinite(v);
     const pct = (/** @type {number} */ v) => `${Math.round(v * 100)}%`;
     const thFor = (/** @type {string} */ k, /** @type {any} */ a) =>
@@ -3835,13 +3942,24 @@ export class TUI {
       return at('unified5h') || at('unified7d');
     }).length;
     segs.push(atLimit ? red(`${atLimit} at limit`) : dim('0 at limit'));
+    if (focusSeg) segs.unshift(focusSeg);
     const head = ` ${bold('Fleet')}  `;
     while (segs.length) {
       const line = head + segs.join(dim('  ·  '));
       if (vw(line) <= W - 1) return line;
       segs.pop();
     }
-    return '';
+    return only;
+  }
+
+  /** [local patch 2026-10-27 원장] `🎯 집중 이름` (한도 때문에 잠시 넘겨준 상태면 꼬리 안내). 없으면 ''. */
+  _focusSeg() {
+    const info = typeof this.am.focusInfo === 'function' ? this.am.focusInfo() : null;
+    if (!info?.name) return '';
+    const name = safeLine(info.name, 64);
+    return info.state === 'away'
+      ? orange(`${bold(`🎯 집중 ${name}`)} (한도 — 잠시 다른 계정)`)
+      : orange(bold(`🎯 집중 ${name}`));
   }
 
   /**
@@ -3873,7 +3991,10 @@ export class TUI {
     const selFamily = isSel && this.selAction === 'switch' && this.selRoute ? routeFamily(this.selRoute) : null;
     const barShown = fam => showBoth && showFamily && q[fam === 'fable' ? 'unified7dFable' : 'unified7dSonnet'] != null;
     const cursorAt = selFamily && barShown(selFamily) ? selFamily : null;
-    const sel = !isSel ? ' ' : cursorAt ? dim('>') : cyan('>');
+    // [local patch 2026-10-27 원장] 집중 계정 줄: 선택 칸에 주황 ◎, 이름은 굵은 주황.
+    const focusName = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
+    const isFocus = !!focusName && a.name === focusName;
+    const sel = !isSel ? (isFocus ? orange('◎') : ' ') : cursorAt ? dim('>') : cyan('>');
     const cur = isCur ? green('►') : ' ';
     // The column before a family bar's marker: the cursor when it moved here, else the separator space.
     const famLead = fam => (cursorAt === fam ? cyan('>') : ' ');
@@ -3913,6 +4034,7 @@ export class TUI {
     // bold name wins on the selected row.
     const name = isSel ? bold(rawName)
       : sessions?.length ? sessionNameCell(a.name, nameW, sessions)
+      : isFocus ? orange(bold(rawName))
       : rawName;
 
     // Type — or the provider, once the pool serves more than one.
@@ -4582,11 +4704,13 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('s')}witch  ${bold('m')}ove  ${bold('R')}eload  ${bold('q')}uit`
-          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${this._cleanupAvailable() ? `${bold('x')} 정리  ` : ''}${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
+          : ` ${bold('s')}witch  ${bold('m')}ove  ${bold('f')} 집중  ${bold('d')}isable  ${this.loginAccount ? `${bold('l')}ogin  ` : ''}${bold('p')}robe quota  ${this._cleanupAvailable() ? `${bold('x')} 정리  ` : ''}${bold('R')}eload  ${bold('g')} settings  ${bold('q')}uit`;
       case 'cleanup':
         return this.cleanup?.stage === 'list'
           ? ` ${bold('y')} 모두 끄기  ${bold('Esc')} 닫기`
           : this.cleanup?.stage === 'kill' ? ' 끄는 중…' : ` ${bold('Esc')} 닫기`;
+      case 'focus':
+        return ` ${dim('↑↓')} 선택  ${bold('Enter')} 집중 계정으로  ${bold('Esc')} 닫기`;
       case 'move':
         return this.move?.stage === 'account'
           ? ` ${dim('↑↓')} select  ${bold('Enter')} move here  ${bold('Esc')} cancel`

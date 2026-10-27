@@ -455,5 +455,26 @@ export function renameAccount(config, query, newName, spec = {}) {
     r.accounts = [...new Set(r.accounts.map((/** @type {string} */ a) => a === from ? name : a))];
     routes.push(r.name);
   }
+  // [local patch 2026-10-27 원장] 집중 계정이 이 계정이면 새 이름으로 따라간다.
+  if (config.focusAccount === from) config.focusAccount = name;
   return { from, name, routes };
+}
+
+/**
+ * [local patch 2026-10-27 원장] 집중 계정 지정/해제. `query` 가 null 이면 해제.
+ * 설정에는 계정 이름(`focusAccount`)을 저장한다. 없는 계정·모호한 이름은 거부(ConfigOpError).
+ *
+ * @param {any} config
+ * @param {string|null} query
+ * @param {{ orgFilter?: string }} [spec]
+ * @returns {{ name: string|null }}
+ */
+export function setFocusAccount(config, query, spec = {}) {
+  if (query == null) {
+    delete config.focusAccount;
+    return { name: null };
+  }
+  const account = resolveConfiguredAccount(config, query, spec.orgFilter);
+  config.focusAccount = account.name;
+  return { name: account.name };
 }

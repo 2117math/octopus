@@ -241,6 +241,14 @@ export class RemoteAccountManager {
     this.updateAvailable = false;
   }
 
+  /** Mirrors AccountManager.focusInfo off the payload's `focusAccount`/`focusState`
+   * ([local patch 2026-10-27 원장] 집중 계정). */
+  focusInfo() {
+    const name = this.status?.focusAccount;
+    if (typeof name !== 'string' || !name) return null;
+    return { name: text(name, NAME_MAX), state: this.status?.focusState === 'away' ? 'away' : 'on' };
+  }
+
   /** Mirrors AccountManager.onExtraUsage off the payload's per-account flag,
    * so the shared row renderer asks one question of either manager.
    * @param {number} index */
