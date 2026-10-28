@@ -80,6 +80,8 @@ const red = s => fg(31, s);
 const cyan = s => fg(36, s);
 const gray = s => fg(90, s);
 const orange = s => fg('38;5;208', s);
+// 꺼 둔 계정 줄(한글 화면): 막대·구독은 그대로, 색만 진한 회색 — 원장 2026-10-28.
+const offGray = s => fg('38;5;242', s);
 
 // Named foreground colors selectable per route (config `color`). Bright variants
 // let a user distinguish several routes at a glance.
@@ -131,6 +133,13 @@ function koAgo(/** @type {number} */ ms) {
   if (m < 60) return `${m}분 전`;
   const h = Math.round(m / 60);
   return h < 24 ? `${h}시간 전` : `${Math.round(h / 24)}일 전`;
+}
+/** 시각: 오늘이면 `21:42`, 아니면 `10/27 21:42`. */
+function koClock(/** @type {number} */ at, now = Date.now()) {
+  const d = new Date(at);
+  const p = (/** @type {number} */ n) => String(n).padStart(2, '0');
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`;
+  return d.toDateString() === new Date(now).toDateString() ? hm : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
 }
 // How far apart two like requests may finish and still share an activity row.
 const ACTIVITY_FOLD_MS = 60_000;
@@ -945,6 +954,9 @@ function tailText(s, w) {
 
 export class TUI {
   constructor({ accountManager, config, saveConfig, syncAccounts, onQuit, sx = null, probeQuota = null,
+    // [local patch 2026-10-27 원장] `w` 5시간 켜기(warmer.js warmTargets/warmNow). 없으면 안내만.
+    warmCandidates = /** @type {(() => any[] | null) | null} */ (null),
+    warmNow = /** @type {((targets: any[], opts?: any) => Promise<any[] | null> | null) | null} */ (null),
     // Cast so the destructured binding is the callback type, not `null`: index.js passes a function here.
     loginAccount = /** @type {LoginAccount | null} */ (null),
     activityLogPath = null,
@@ -988,6 +1000,8 @@ export class TUI {
     this.sx = sx;            // sx.org proxy manager (may be null)
     this.sxBalance = null;   // last fetched sx.org balance, for the settings screen
     this.probeQuota = probeQuota; // on-demand fleet-wide quota refresh (may be null)
+    this.warmCandidates = warmCandidates;
+    this.warmNow = warmNow;
     /** @type {LoginAccount | null} */
     this.loginAccount = loginAccount; // (re-)login for a chosen account (may be null)
     this._env = env;
@@ -1025,11 +1039,15 @@ export class TUI {
     this.inputPrompt = '';
     this.inputBuf = '';
     this.inputCb = null;
-    this.inputSecret = false;
+    this.inputSecret = false;    // a key is being typed: the footer echoes * for each char
     /** @type {Map<string, number>} 세션이 처음 보인 순서(한글 화면) */
     this._sessOrder = new Map();
     /** @type {Map<string, { ok: boolean, status: any, dur: string, at: number }>} 세션별 최근 요청(한글 화면) */
-    this._sessLast = new Map();    // a key is being typed: the footer echoes * for each char
+    this._sessLast = new Map();
+    /** @type {any[] | null} W 확인 화면에서 켤 계정 */
+    this._warmPick = null;
+    /** @type {Set<any> | null} W 로 켜는 중인 계정(아직 차례가 안 온 것 포함) */
+    this._warming = null;
     this.inputReturn = 'normal'; // mode to fall back to when an input is cancelled
     this.frame = 0;
     this.running = false;
@@ -1381,6 +1399,13 @@ export class TUI {
     if (d === '\x03') return this._key('ctrl-c');
     if (d === '\x7f' || d === '\x08') return this._key('bs');
     if (d.length === 1 && d >= ' ') return this._key(d);
+    // [local patch 2026-10-27 원장] 한글 입력기는 자모 하나를 조합 중으로 붙잡았다가 다음 키와
+    // 한 번에 내보낸다(ㅈ 뒤 Enter → "ㅈ\r"). 통째로 버리던 것을, 맨 앞 자모를 키로 먼저 처리하고
+    // 나머지를 이어 읽는다. 자모는 키 시퀀스의 일부일 수 없고, 글자 입력 화면은 아래 붙여넣기 그대로.
+    if (this.mode !== 'input' && this.mode !== 'login' && d.length > 1 && /^[ㄱ-ㆎ]/.test(d)) {
+      this._key(d[0]);
+      return this._onKeys(d.slice(1));
+    }
     // A paste arrives as ONE chunk of many characters, which the line above
     // turns away, so a pasted proxy URL or API key vanished without a sign,
     // and those are exactly the values nobody types by hand. Only a text
@@ -1522,6 +1547,7 @@ export class TUI {
       case 'move': this._keyMove(k); break;
       case 'focus': this._keyFocus(k); break;
       case 'cleanup': this._keyCleanup(k); break;
+      case 'warm': this._keyWarm(k); break;
     }
     this.render();
   }
@@ -1546,6 +1572,8 @@ export class TUI {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
     else if (k === 'p' && this.am.accounts.length > 0) { this._doProbe(); }
+    // [local patch 2026-10-27 원장] W: 5시간 창이 안 도는 계정을 보여 주고 Enter 로 지금 켠다.
+    else if (k === 'w' && this.am.accounts.length > 0) { this._openWarm(); }
     else if ((k === 'f' || k === 'F') && this.am.accounts.length > 0) { this._openFocus(); }
     else if (k === 'x' && this._cleanupAvailable()) { this._openCleanup(); }
     // Re-login: an OAuth account whose refresh token upstream has rejected stays
@@ -2186,6 +2214,63 @@ export class TUI {
     }
   }
 
+  // [local patch 2026-10-27 원장] `w`: 5시간 창이 안 도는 계정에 짧은 메시지를 하나씩 보내 창을
+  // 지금 시작시킨다(warmer.js 와 같은 방식, 켜기 간격·일정 설정과 별개로 한 번만).
+  // 주간을 다 쓴 계정은 켜 봐야 못 쓰므로 뺀다. 대상은 * 로 보여 주고 Enter 로 확인한다.
+  _warmPicks() {
+    const list = this.warmCandidates?.();
+    if (!Array.isArray(list)) return [];
+    return list.filter(a => {
+      const i = this.am.accounts.indexOf(a);
+      return i >= 0 && !this._isWeeklySpent(i);
+    });
+  }
+
+  _openWarm() {
+    if (!this.warmNow || !this.warmCandidates) { this._addLog('5시간 켜기를 쓸 수 없습니다'); return; }
+    if (this._warming) { this._addLog('5시간 켜는 중입니다 — 끝난 뒤 다시 누르세요'); return; }
+    const picks = this._warmPicks();
+    if (picks.length === 0) { this._addLog('켤 계정이 없습니다 — 모두 5시간이 이미 돌고 있거나 쓸 수 없는 계정이에요'); return; }
+    this._warmPick = picks;
+    this.mode = 'warm';
+  }
+
+  _keyWarm(/** @type {string} */ k) {
+    if (k === 'esc') { this._warmPick = null; this.mode = 'normal'; return; }
+    if (k !== 'enter') return;
+    const picks = this._warmPick || [];
+    this._warmPick = null;
+    this.mode = 'normal';
+    this._doWarm(picks);
+  }
+
+  /** @param {any[]} picks */
+  async _doWarm(picks) {
+    if (this._warming || picks.length === 0) return;
+    const short = (/** @type {any} */ a) => String(a.name).replace(KO_DOMAIN_RE, '');
+    const warming = this._warming = new Set(picks);
+    this._addLog(`5시간 켜기 시작: ${picks.length}개 (${picks.map(short).join(', ')})`);
+    try {
+      const res = await this.warmNow?.(picks, {
+        onDone: (/** @type {any} */ a, /** @type {any} */ s) => {
+          warming.delete(a);
+          if (s?.status === 'error') this._addLog(red(`✗ ${short(a)} 5시간 켜기 실패: ${s.error}`));
+          else if (this.running) this.render();
+        },
+      });
+      if (res == null) { this._addLog('다른 켜기가 돌고 있습니다 — 끝난 뒤 다시 누르세요'); return; }
+      const n = (/** @type {string} */ st) => res.filter(r => r.status === st).length;
+      const ok = n('ok'), fail = n('error'), skip = n('skipped');
+      const tail = `${fail ? ` · 실패 ${fail}` : ''}${skip ? ` · 건너뜀 ${skip}(그새 켜졌거나 멈춤)` : ''}`;
+      this._addLog(`${ok ? green(`5시간 켬 ${ok}개`) : '5시간 켬 0개'}${tail}`);
+    } catch (e) {
+      this._addLog(red(`5시간 켜기 실패: ${/** @type {Error} */ (e).message}`));
+    } finally {
+      this._warming = null;
+      if (this.running) this.render();
+    }
+  }
+
   // Sign-in for the account under the cursor (the `l` key). The row chooses
   // the PROVIDER's sign-in page and tells the operator which identity to sign
   // in as; it does not choose where the tokens go. They go to the account the
@@ -2601,9 +2686,22 @@ export class TUI {
     return u >= t;
   }
 
+  /** 5시간 자동 켜기(keep-warm)가 설정에서 켜져 있는지 — 간격이든 일정이든. */
+  _autoWarmOn() {
+    const c = this.config || {};
+    return !!c.warmupSchedule || (Number(c.warmupSeconds) || 0) > 0;
+  }
+
+  /** 「자동」 칸의 점(원장 2026-10-28): 녹색 5시간 창 돎 · 빨강 안 돎 · 회색 주간 다 써서 자동이 안 켬. */
+  _autoDot(/** @type {number} */ i) {
+    if (this._isWeeklySpent(i)) return gray('●');
+    const reset = Number(this.am.accounts[i]?.quota?.unified5hReset);
+    return reset > Date.now() ? green('●') : red('●');
+  }
+
   /** 대시보드에 그릴 줄: H 로 숨김을 켰으면 주간 다 쓴 계정을 뺀다(선택 화면 등은 전부). */
   _visibleRows(/** @type {number[]} */ indices) {
-    if (this.config?.hideSpent !== true || this.mode !== 'normal') return indices;
+    if (this.config?.hideSpent !== true || (this.mode !== 'normal' && this.mode !== 'warm')) return indices;
     return indices.filter(i => !this._isWeeklySpent(i));
   }
 
@@ -3044,7 +3142,7 @@ export class TUI {
       this._renderFocus(lines, W, H - footerH);
     } else if (view === 'cleanup') {
       this._renderCleanup(lines, W);
-    } else if ((view === 'normal' || view === 'select') && this._koLayout() && this.am.accounts.length > 0) {
+    } else if ((view === 'normal' || view === 'select' || view === 'warm') && this._koLayout() && this.am.accounts.length > 0) {
       this._renderKo(lines, W, H - footerH);
     } else {
     // ── Accounts, or the login panel in their place. The activity pane stays
@@ -4920,6 +5018,11 @@ export class TUI {
     const nameW = Math.min(24, Math.max(10, ...order.map((/** @type {number} */ i) => vw(accts[i].name.replace(KO_DOMAIN_RE, '')))));
     const anyFable = order.some((/** @type {number} */ i) => accts[i].quota?.unified7dFable != null);
     const cols = ['5시간', '일주일', ...(anyFable ? ['Fable'] : [])];
+    // 「자동」 칸(5시간 막대 오른쪽, 원장 2026-10-28): 머리글 색 = 자동 켜기 설정(녹색 켬 · 빨강 끔),
+    // 줄의 점 = 그 계정 5시간 창이 지금 도는지(_autoDot).
+    const AUTO_W = vw('자동');
+    const autoOn = this._autoWarmOn();
+    const barsW = cols.length * BW + (cols.length - 1) * 2 + AUTO_W + 2;
     // 세션 점은 5시간 막대 바로 왼쪽(막히는 기준이 5시간이라 — 원장 2026-10-27). 최대 4개, 넘으면 +N.
     const DOT_MAX = 4;
     const dotsW = Math.min(DOT_MAX + 2, Math.max(0, ...order.map((/** @type {number} */ i) => {
@@ -4927,36 +5030,46 @@ export class TUI {
       return n > DOT_MAX ? DOT_MAX + 2 : n;
     })));
     const dotCol = dotsW ? dotsW + 1 : 0;
-    lines.push(`  ${' '.repeat(nameW)}  ${' '.repeat(dotCol)}${cols.map(c => dim(rpad(c, BW))).join('  ')}  ${dim('구독')}`);
+    const hdr = cols.map(c => dim(rpad(c, BW)));
+    hdr.splice(1, 0, (autoOn ? green : red)(rpad('자동', AUTO_W)));
+    lines.push(`  ${' '.repeat(nameW)}  ${' '.repeat(dotCol)}${hdr.join('  ')}  ${dim('구독')}`);
     const th = (/** @type {any} */ a, /** @type {string} */ b) => (typeof this.am.thresholdFor === 'function' ? this.am.thresholdFor(b, a) : null);
     const pctOn = true;
+    // W: 켤 계정(확인 화면)·켜는 중인 계정은 노란 * 로.
+    const warmSet = this.mode === 'warm' ? new Set(this._warmPick || []) : this._warming;
     for (const i of order) {
       const a = accts[i];
       const q = a.quota || {};
       const isSel = this.mode === 'select' && i === this.selIdx;
+      const warmOn = !!warmSet?.has(a);
       const focusName = typeof this.am.focusInfo === 'function' ? this.am.focusInfo()?.name : null;
-      const mark = isSel ? cyan('>') : (focusName && a.name === focusName ? orange('◎') : ' ');
+      const mark = isSel ? cyan('>') : warmOn ? yellow('*') : (focusName && a.name === focusName ? orange('◎') : ' ');
       const nm = rpad(truncate(a.name.replace(KO_DOMAIN_RE, ''), nameW), nameW);
       const st = states[i];
-      const nameTxt = isSel ? bold(nm) : st === 'off' ? gray(nm) : nm;
+      const nameTxt = isSel ? bold(nm) : warmOn ? yellow(nm) : st === 'off' ? offGray(nm) : nm;
       let body;
-      if (st === 'error') body = red('⚠ 다시 로그인 필요 (L)');
-      else if (st === 'off') body = gray('꺼 둠 (D 로 켜기)');
+      // 언제부터인지 같이(서버를 다시 켜면 다시 시도한 시각) — 원장 2026-10-28.
+      if (st === 'error') body = red(`⚠ 다시 로그인 필요 (L)${a.errorReason?.since ? ` · ${koClock(a.errorReason.since)}부터` : ''}`);
       else {
+        // 꺼 둔 계정(원장 2026-10-28 「구독이 남아서 잠깐 안 쓰는 것」)도 막대·구독은 그대로, 색만 진한 회색.
+        const off = st === 'off';
+        const paint = (/** @type {string} */ s) => off ? offGray(strip(s)) : s;
         const cells = [
-          bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn),
-          bar(q.unified7d, BW, q.unified7dReset, SEVEN_DAY_MS, th(a, 'unified7d'), pctOn),
+          paint(bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn)),
+          rpad(off ? offGray('●') : this._autoDot(i), AUTO_W),
+          paint(bar(q.unified7d, BW, q.unified7dReset, SEVEN_DAY_MS, th(a, 'unified7d'), pctOn)),
         ];
-        if (anyFable) cells.push(q.unified7dFable != null
+        if (anyFable) cells.push(paint(q.unified7dFable != null
           ? bar(q.unified7dFable, BW, q.unified7dFableReset, SEVEN_DAY_MS, th(a, 'unified7dFable'), pctOn)
-          : dim(rpad(' '.repeat(Math.floor(BW / 2)) + '─', BW)));
+          : dim(rpad(' '.repeat(Math.floor(BW / 2)) + '─', BW))));
         body = cells.join('  ');
       }
       const subRaw = this._subscriptionTail(a, true).replace(/^ · 구독 /, '');
       const subT = subscriptionText(a?.subscription ?? (a?.subscriptionCreatedAt || a?.renewDate ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus, renewDate: a.renewDate } : null));
-      const sub = !subRaw ? '' : subT && subT.level >= 2 ? red(subRaw) : subT && subT.level === 1 ? orange(subRaw) : dim(subRaw);
-      const bodyW = st === 'ok' || st === 'rest' ? cols.length * BW + (cols.length - 1) * 2 : vw(strip(body));
-      const pad = ' '.repeat(Math.max(0, cols.length * BW + (cols.length - 1) * 2 - bodyW));
+      const sub = st === 'off' ? offGray(`${subRaw ? `${subRaw}  ` : ''}꺼 둠`)
+        : !subRaw ? '' : subT && subT.level >= 2 ? red(subRaw) : subT && subT.level === 1 ? orange(subRaw) : dim(subRaw);
+      const bodyW = st === 'error' ? vw(strip(body)) : barsW;
+      const pad = ' '.repeat(Math.max(0, barsW - bodyW));
       const mine = byAcct.get(i) || [];
       const dots = mine.slice(0, DOT_MAX).map((/** @type {any} */ s) => fg(this._sessColor(s.id), '●')).join('')
         + (mine.length > DOT_MAX ? dim(`+${mine.length - DOT_MAX}`) : '');
@@ -5007,7 +5120,7 @@ export class TUI {
   _renderFooterKo() {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
     const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), k('D', '끄기/켜기'), ...(this.loginAccount ? [k('L', '로그인')] : []), k('P', '사용량조회')];
-    const line2 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), k('B', '계정빼기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('R', '새로고침'), k('G', '설정'), k('Q', '종료')];
+    const line2 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), k('B', '계정빼기'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('R', '새로고침'), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`];
   }
 
@@ -5016,7 +5129,13 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+      case 'warm': {
+        const picks = this._warmPick || [];
+        const names = picks.map(a => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');
+        // 한글 화면은 대상 줄에 * 가 붙으니 이름은 옛 화면에서만 덧붙인다(좁으면 끝부터 잘린다).
+        return ` ${yellow(`5시간이 안 도는 계정 ${picks.length}개(*)를 지금 켤까요?`)}  ${bold('Enter')} 켜기  ${bold('Esc')} 취소  ${dim('· 계정마다 짧은 메시지 1개')}${this._koLayout() ? '' : `  ${dim(names)}`}`;
+      }
       case 'cleanup':
         return this.cleanup?.stage === 'list'
           ? ` ${bold('y')} 모두 끄기  ${bold('Esc')} 닫기`

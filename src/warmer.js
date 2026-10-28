@@ -219,6 +219,10 @@ export class Warmer {
     if (!warmApplicable(account) || !account.credential) return false;
     if (account.disabled) return false;
     if (account.status === 'error' || account.status === 'exhausted' || account.status === 'throttled') return false;
+    // [local patch 2026-10-28 원장] 주간을 다 쓴 계정은 켜 봐야 못 쓴다(TUI 의 W 와 같은 기준).
+    const weekly = account.quota?.unified7d;
+    if (weekly != null && typeof this.am.thresholdFor === 'function'
+      && weekly >= this.am.thresholdFor('unified7d', account)) return false;
     return true;
   }
 
@@ -260,6 +264,10 @@ export class Warmer {
     generation = this._scheduleGeneration,
     waitForRunning = false,
     deadline = null,
+    // [local patch 2026-10-27 원장] warmNow 의 진행 알림. onDone 의 둘째 값은 이번에
+    // 켠 결과(ok/error), 차례가 왔을 때 대상이 아니어서 건너뛰었으면 null.
+    onStart = /** @type {((account: any) => void) | null} */ (null),
+    onDone = /** @type {((account: any, status: any) => void) | null} */ (null),
   } = {}) {
     while (this._running) {
       if (!waitForRunning) return false;
@@ -282,13 +290,17 @@ export class Warmer {
           && (deadline === null || this.nowFn() < deadline);
         if (abort.signal.aborted || !canContinue()) break;
         const isStillEligible = () => this._isWarmTarget(account);
-        if (!isStillEligible()) continue;
+        if (!isStillEligible()) { onDone?.(account, null); continue; }
+        const before = Date.now();
+        onStart?.(account);
         await this.warmAccount(
           account,
           abort.signal,
           canContinue,
           isStillEligible,
         );
+        const status = this.accountStatus.get(account.name);
+        onDone?.(account, status && status.startedAt >= before ? status : null);
       }
       return true;
     } finally {
@@ -298,6 +310,30 @@ export class Warmer {
       if (this._runFinished === runFinished) this._runFinished = null;
       finishRun();
     }
+  }
+
+  /** [local patch 2026-10-27 원장] 지금 켤 수 있는 계정: 5시간 창이 안 도는 건강한 계정. */
+  warmTargets(now = this.nowFn()) {
+    return this.am.accounts.filter((/** @type {any} */ account) => this._isWarmTarget(account, now));
+  }
+
+  /**
+   * [local patch 2026-10-27 원장] TUI `W`: 켜기 간격·일정이 꺼져 있어도 지금 한 번 켠다.
+   * Resolves with each target's outcome — 'ok', 'error', or 'skipped' (no longer
+   * a target by its turn: a request started its window meanwhile, or the sweep
+   * was stopped) — or null when another sweep is already running.
+   * @param {any[]} [targets]
+   * @param {{ onStart?: ((account: any) => void) | null, onDone?: ((account: any, status: any) => void) | null }} [opts]
+   */
+  async warmNow(targets = this.warmTargets(), { onStart = null, onDone = null } = {}) {
+    const t0 = Date.now();
+    const ran = await this._warmTargets(targets, { onStart, onDone });
+    if (!ran) return null;
+    return targets.map(account => {
+      const s = this.accountStatus.get(account.name);
+      const fresh = s && s.startedAt >= t0 && s.status !== 'running';
+      return { account, status: fresh ? s.status : 'skipped', error: fresh ? s.error || null : null };
+    });
   }
 
   _deferWarmAccount(account, runAt, generation) {

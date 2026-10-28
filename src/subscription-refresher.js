@@ -72,10 +72,10 @@ export class SubscriptionRefresher {
     return this._running;
   }
 
-  /** anthropic OAuth·자격 있음·disabled 아님·죽은 refresh token 아님. Codex 등은 제외. */
+  /** anthropic OAuth·자격 있음·죽은 refresh token 아님. Codex 등은 제외.
+   *  꺼 둔(disabled) 계정도 포함 — 원장 2026-10-28, prober.js 의 같은 패치 참고. */
   _eligible(/** @type {any} */ account) {
     if (!isAnthropicProbeTarget(account)) return false;
-    if (account.disabled) return false;
     if (account._deadRefreshToken && account._deadRefreshToken === account.refreshToken) return false;
     return true;
   }

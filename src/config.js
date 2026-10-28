@@ -111,6 +111,9 @@ export function createDefaultConfig() {
     sessionTitles: { enabled: false, width: 18 },
     quotaBarPercent: false,
     hideSpent: false,
+    // [local patch 2026-10-28 원장] 5시간 자동 켜기(keep-warm)는 기본 켬: 10분마다 쉬는 계정의
+    // 5시간 창을 미리 시작시킨다(계정마다 짧은 메시지 1개, 사용량 조금 씀). 끄기: octopus warmup off.
+    warmupSeconds: 600,
     // Activity rows: 'full' (method and path) or 'compact' (wider session title).
     activityFormat: 'full',
     accountSort: 'arranged',

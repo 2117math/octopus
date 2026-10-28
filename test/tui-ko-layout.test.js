@@ -23,21 +23,66 @@ function makeTUI(sessions = []) {
   return tui;
 }
 
-function renderToString(tui) {
+function renderRaw(tui) {
   const chunks = [];
   const orig = process.stdout.write;
   process.stdout.write = c => { chunks.push(String(c)); return true; };
   try { tui.running = true; tui._render(true); } finally { process.stdout.write = orig; tui.running = false; }
-  return stripAnsi(chunks.join(''));
+  return chunks.join('');
 }
+const renderToString = tui => stripAnsi(renderRaw(tui));
 
 test('koLayout: 막대 이름은 머리글 한 줄, 줄마다 Ses/Wk 없음, 정상 계정엔 active 없음', () => {
   const out = renderToString(makeTUI());
-  assert.match(out, /5시간\s+일주일\s+구독/);
+  assert.match(out, /5시간\s+자동\s+일주일\s+구독/);
   assert.doesNotMatch(out, /\bSes\b|\bWk\b|\bactive\b/);
   assert.match(out, /계정 3 · 사용 가능 1 · 쉬는 중 1 · 오류 1/);
   assert.match(out, /c\s+⚠ 다시 로그인 필요/);
   assert.match(out, /새로고침/);
+});
+
+test('koLayout: 「자동」 머리글은 자동 켜기 설정 색(녹색 켬 · 빨강 끔)', () => {
+  const tui = makeTUI();
+  tui.config.warmupSeconds = 600;
+  assert.match(renderRaw(tui), /\x1b\[32m자동/);
+  tui.config.warmupSeconds = 0;
+  assert.match(renderRaw(tui), /\x1b\[31m자동/);
+  tui.config.warmupSchedule = { mode: 'rolling', resetTime: '15:30', timezone: 'Asia/Seoul' };
+  assert.match(renderRaw(tui), /\x1b\[32m자동/);
+});
+
+test('koLayout: 「자동」 점은 5시간 막대 오른쪽 — 녹색 창 돎 · 빨강 안 돎 · 회색 주간 다 씀', () => {
+  const tui = makeTUI();
+  tui.am.accounts.push({ name: 'd@gmail.com', index: 3, type: 'oauth', status: 'active', credential: 't', quota: { unified5h: 0.2, unified5hReset: Date.now() - H, unified7d: 0.1 } });
+  tui.config.accounts.push({ name: 'd@gmail.com', type: 'oauth' });
+  assert.match(tui._autoDot(0), /^\x1b\[32m●/, 'a: 5시간 창이 돈다');
+  assert.match(tui._autoDot(1), /^\x1b\[90m●/, 'b: 주간 99%');
+  assert.match(tui._autoDot(3), /^\x1b\[31m●/, 'd: 창이 끝났다');
+  const out = renderToString(tui);
+  assert.match(out, /^\s+a\s+50%[^\n]*?●\s+20%/m);
+  assert.match(out, /^\s+d\s+20%\s+●\s+10%/m);
+});
+
+test('koLayout: 꺼 둔 계정도 막대·구독은 그대로, 진한 회색 + 「꺼 둠」 (원장 2026-10-28)', () => {
+  const tui = makeTUI();
+  const now = Date.now();
+  tui.am.accounts.push({ name: 'e@gmail.com', index: 3, type: 'oauth', status: 'active', credential: 't', disabled: true, renewDate: '2026-11-05', quota: { unified5h: 0.4, unified5hReset: now + H, unified7d: 0.1, unified7dReset: now + 50 * H } });
+  tui.config.accounts.push({ name: 'e@gmail.com', type: 'oauth' });
+  const raw = renderRaw(tui);
+  const out = stripAnsi(raw);
+  assert.match(out, /^\s+e\s+40%[^\n]*?●\s+10%[^\n]*꺼 둠/m);
+  assert.doesNotMatch(out, /D 로 켜기/);
+  assert.match(out, /꺼 둠 1/);
+  assert.match(raw, /\x1b\[38;5;242m\s*40%/, '막대가 진한 회색');
+});
+
+test('koLayout: 다시 로그인이 필요한 계정은 언제부터인지 같이 보인다', () => {
+  const tui = makeTUI();
+  const since = new Date(Date.now() - 2 * 24 * H);
+  since.setHours(21, 42, 0, 0);
+  tui.am.accounts[2].errorReason = { code: 'refresh_rejected', since: since.getTime() };
+  const out = renderToString(tui);
+  assert.match(out, new RegExp(`c\\s+⚠ 다시 로그인 필요 \\(L\\) · ${since.getMonth() + 1}/${since.getDate()} 21:42부터`));
 });
 
 test('koLayout: H 숨김이면 주간 다 쓴 계정 줄이 빠지고 개수가 나온다', () => {

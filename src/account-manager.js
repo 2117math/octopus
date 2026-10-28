@@ -5298,6 +5298,8 @@ export class AccountManager {
         // account: keep its current token and retry on the next request. This is
         // what kept accounts wrongly "errored" after a momentary refresh blip.
         const isAuthRejection = err.status === 400 || err.status === 401 || err.status === 403;
+        // [local patch 2026-10-28 원장] 토큰 기록(token-safety.js)용. 기록이 갱신 처리를 막지 않게.
+        try { this._onRefreshFailed?.(account, err, { rejected: isAuthRejection }); } catch { /* listener's problem */ }
         if (isAuthRejection) {
           // Remember WHICH token was rejected so we stop re-sending it (see the
           // dead-token guard above). A transient failure deliberately does not
@@ -5326,6 +5328,16 @@ export class AccountManager {
    */
   onTokenRefresh(callback) {
     this._onTokenRefresh = callback;
+  }
+
+  /**
+   * [local patch 2026-10-28 원장] Set a callback told of every failed renewal:
+   * `rejected` when upstream refused the refresh token (the account then needs
+   * a re-login), otherwise a transient failure that is retried.
+   * @param {(account: Record<string, any>, err: any, info: { rejected: boolean }) => void} callback
+   */
+  onRefreshFailed(callback) {
+    this._onRefreshFailed = callback;
   }
 
   /** Replace the refresh coordinator (see the constructor option). */

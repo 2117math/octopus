@@ -149,7 +149,8 @@ export class Prober {
   // on its own.
   _probeable(account) {
     if (!account?.credential) return false;
-    if (account.disabled) return false;
+    // [local patch 2026-10-28 원장] 꺼 둔(disabled) 계정도 조회한다 — 「구독이 남아서 잠깐 안 쓰는 것」이라
+    // 사용량·구독은 계속 보고 싶다는 뜻. 조회는 사용량을 쓰지 않고, 토큰 갱신은 그 계정의 평소 갱신과 같다.
     if (account._deadRefreshToken && account._deadRefreshToken === account.refreshToken) return false;
     return true;
   }

@@ -429,16 +429,15 @@ test('prober refreshes expired token before probing', async () => {
   assert.equal(token, 'fresh');
 });
 
-// A probe forces a refresh and sends the token upstream. Neither belongs to an
-// account the operator disabled, nor to one whose refresh token upstream has
-// already rejected: re-sending it just rotates the family once more.
-test('prober skips disabled accounts', async () => {
+// [local patch 2026-10-28 원장] 꺼 둔(disabled) 계정도 조회한다 — 구독이 남아 잠깐 안 쓰는 계정의
+// 사용량·구독을 계속 보려고. 거절된 refresh token 을 든 계정만 건너뛴다(다음 시험).
+test('prober probes disabled accounts too (꺼 둔 계정도 추적)', async () => {
   const am = new AccountManager([oauth('a'), oauth('b')], 0.98);
   am.setDisabled(0, true);
   const probed = [];
   const prober = new Prober(am, { intervalMs: 0, probeFn: async cred => { probed.push(cred); return {}; }, log: () => {} });
   await prober.probeAll();
-  assert.deepEqual(probed, ['t-b']);
+  assert.deepEqual(probed.sort(), ['t-a', 't-b']);
 });
 
 test('prober skips an account holding a rejected refresh token, until a new one arrives', async () => {

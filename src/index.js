@@ -59,6 +59,7 @@ import { HostStats } from './host-stats.js';
 import { envVar } from './brand.js';
 import { loginCallback, loadCallbackToken, saveCallbackToken, callbackWhoami, logoutCallback, callbackClientId, getCallbackAuthPath } from './callback-auth.js';
 import { CredentialSync, refreshOutsideProxy } from './credential-sync.js';
+import { createTokenLog, oauthErrorOf, settleTokenWork, TOKEN_SETTLE_MS, tokenLogPathFor } from './token-safety.js';
 
 // The server's credential sync, once it runs; a CLI command that changes an
 // account on disk talks to the store through a sync of its own instead.
@@ -492,6 +493,19 @@ async function serverCommand() {
   // An account in error looks in the store for a token another install holds.
   accountManager.onAccountError((account) => { credentialSync.onAccountError(account).catch(() => {}); });
 
+  // [local patch 2026-10-28 원장] 토큰 기록과, 끄기 전에 기다릴 새 토큰 저장들(token-safety.js).
+  const tokenLog = createTokenLog(tokenLogPathFor(getConfigPath()));
+  /** @type {Set<Promise<unknown>>} */
+  const tokenSaves = new Set();
+  const clockOf = (/** @type {number} */ ms) => new Date(ms).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  accountManager.onRefreshFailed((account, err, { rejected }) => {
+    const oauth = oauthErrorOf(err);
+    const why = oauth ? [oauth.code, oauth.description].filter(Boolean).join(': ') : err?.message || String(err);
+    tokenLog(rejected
+      ? `${account.name} 갱신 거절 ${err?.status ?? ''} ${why} — 다시 로그인 필요`
+      : `${account.name} 갱신 실패(일시적, 다음 요청 때 다시) ${err?.status ?? ''} ${why}`);
+  });
+
   // Persist refreshed tokens back to config (re-read from disk to avoid clobbering
   // accounts added externally, e.g. by `teamclaude import` while server is running)
   accountManager.onTokenRefresh((idx, newTokens) => {
@@ -502,7 +516,7 @@ async function serverCommand() {
     // keeps what it had; the disk write below is unaffected either way, since it
     // resolves its own row through findConfigAccount rather than this pairing.
     syncRefreshedTokens(config.accounts, accountManager.accounts, idx, newTokens);
-    atomicConfigUpdate(diskConfig => {
+    const save = atomicConfigUpdate(diskConfig => {
       // Pick up any new accounts from disk so the running fleet serves them
       // (only add, don't refresh credentials — we're about to write the authoritative tokens)
       const removed = removedAccountIds(config);
@@ -527,7 +541,15 @@ async function serverCommand() {
         diskConfig.accounts[cfgIdx].refreshToken = newTokens.refreshToken;
         diskConfig.accounts[cfgIdx].expiresAt = newTokens.expiresAt;
       }
-    }).catch(err => console.error(`[Octopus] Failed to save refreshed token: ${err.message}`));
+    }).then(
+      () => tokenLog(`${account.name} 갱신 OK — 새 토큰 저장(${clockOf(newTokens.expiresAt)}까지)`),
+      err => {
+        console.error(`[Octopus] Failed to save refreshed token: ${err.message}`);
+        tokenLog(`${account.name} 새 토큰 저장 실패: ${err.message}`);
+      });
+    // Shutdown waits for this: the old token died when this one was minted.
+    tokenSaves.add(save);
+    save.finally(() => tokenSaves.delete(save));
     // And to the credential store, when signed in. Not awaited: the disk
     // write above is the one that must land; the store follows.
     credentialSync.onLocalTokens(idx, newTokens).catch(() => {});
@@ -737,7 +759,17 @@ async function serverCommand() {
   /** @type {Promise<unknown>} */
   let reloading = Promise.resolve();
   const reloadAccounts = () => {
-    const next = reloading.catch(() => {}).then(doReload);
+    const next = reloading.catch(() => {}).then(async () => {
+      // [local patch 2026-10-28 원장] 설정 파일에서 새 토큰을 받은 계정(로그인·새로고침)도 토큰 기록에.
+      const before = new Map(accountManager.accounts.map(a => [a, a.refreshToken]));
+      const result = await doReload();
+      for (const a of accountManager.accounts) {
+        if (a.type !== 'oauth') continue;
+        if (!before.has(a)) tokenLog(`${a.name} 계정 추가`);
+        else if (a.refreshToken && a.refreshToken !== before.get(a)) tokenLog(`${a.name} 설정 파일의 새 토큰으로 바꿈(로그인·새로고침)`);
+      }
+      return result;
+    });
     reloading = next;
     return next;
   };
@@ -841,6 +873,10 @@ async function serverCommand() {
       // `p` key: on-demand fleet-wide quota refresh. The prober is constructed
       // after the TUI, so this is a thunk over the closure variable.
       probeQuota: () => prober?.probeAll(),
+      // [local patch 2026-10-27 원장] `w` key: 5시간 창이 안 도는 계정을 지금 한 번 켠다
+      // (켜기 간격·일정 설정과 별개). The warmer, too, is constructed after the TUI.
+      warmCandidates: () => warmer?.warmTargets() ?? null,
+      warmNow: (/** @type {any[]} */ targets, /** @type {any} */ opts) => warmer ? warmer.warmNow(targets, opts) : null,
       // ctrl-c / q from the TUI: funnel through the same idempotent shutdown as
       // POSIX signals (defined below). In raw mode ctrl-c never reaches the OS as
       // a signal, so without this the process would only tear down via keypress.
@@ -1010,6 +1046,7 @@ async function serverCommand() {
     // benign runtime handler so a later 'error' is logged rather than thrown.
     server.removeListener('error', onListenError);
     server.on('error', err => console.error(`[Octopus] Server error: ${err.message}`));
+    tokenLog(`서버 시작 (PID ${process.pid}, 계정 ${accountManager.accounts.length}개)`);
     // Announce an egress proxy, especially one inherited from the environment:
     // it changes where every upstream byte goes, and a value nobody typed here
     // should never be in force silently.
@@ -1127,11 +1164,18 @@ async function serverCommand() {
     if (quotaSaveInterval) clearInterval(quotaSaveInterval);
     await persistQuotaState();
     // Don't linger waiting on keep-alive / streaming connections: actively
-    // destroy them so server.close() can complete promptly, and hard-exit after a
-    // short grace period in case anything still hangs.
-    setTimeout(() => process.exit(0), 2000).unref?.();
+    // destroy them, and stop listening, so no new request starts a renewal.
     server.closeAllConnections?.();
-    server.close(() => process.exit(0));
+    server.close(() => {});
+    // [local patch 2026-10-28 원장] 그다음, 진행 중인 토큰 갱신과 새 토큰 저장이 끝나길 기다린다(최대
+    // TOKEN_SETTLE_MS). 갱신은 보내는 순간 옛 토큰을 죽이므로, 저장 전에 나가면 설정 파일에는 죽은 옛
+    // 토큰만 남고 다음 시작 때 그 계정이 「다시 로그인 필요」가 된다. 전에는 이걸 기다리지 않고 나갔다.
+    // 두 번째 Ctrl+C 는 위에서처럼 바로 나간다.
+    const busy = accountManager.accounts.filter(a => a?._refreshPromise).length + tokenSaves.size;
+    if (busy) process.stdout.write(`[Octopus] 로그인 토큰 ${busy}건 저장을 기다립니다 (최대 ${TOKEN_SETTLE_MS / 1000}초)...\n`);
+    const settled = await settleTokenWork(accountManager.accounts, tokenSaves, TOKEN_SETTLE_MS);
+    tokenLog(`서버 종료${settled.pending ? ` (토큰 ${settled.pending}건 ${settled.timedOut ? '기다리다 시간 초과' : '저장 끝까지 기다림'})` : ''}`);
+    process.exit(0);
   }
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -2169,12 +2213,20 @@ async function accountsCommand() {
   // so a file written before ids existed needs its ids on disk first.
   await persistMintedAccountIds(config);
 
+  // [local patch 2026-10-28 원장] 서버가 켜져 있으면 여기서 토큰을 갱신하지 않는다. 갱신하면 서버가
+  // 들고 있는 토큰이 그 자리에서 죽고, 서버의 다음 갱신이 거절돼 그 계정이 「다시 로그인 필요」가
+  // 된다(쉬는 계정은 토큰이 만료된 채 있는 때가 많다). 그런 계정은 프로필 조회도 건너뛰고,
+  // 설정 파일에 있는 요금제로 보여 준다. 토큰은 서버가 쓸 때 갱신한다.
+  const serverHolds = await isProxyUp(config.proxy.port);
+  const heldByServer = (/** @type {any} */ a) => serverHolds && a.type === 'oauth' && isTokenExpiringSoon(a.expiresAt);
+
   // Refresh expired tokens before fetching profiles. Each call goes by the
   // account's own routing when it has one — this is that account's traffic.
   const refreshed = [];
   await Promise.all(config.accounts.map(async (a) => {
     if (a.type !== 'oauth' || !a.refreshToken) return;
     if (!isTokenExpiringSoon(a.expiresAt)) return;
+    if (serverHolds) return;
     try {
       // Through the callback.net lock when signed in there, as the running
       // proxy's own refreshes are: another install, or the proxy on this one,
@@ -2209,7 +2261,7 @@ async function accountsCommand() {
   // Fetch profiles in parallel for all OAuth accounts
   const profiles = await Promise.all(
     config.accounts.map(a =>
-      a.type === 'oauth' && a.accessToken ? fetchProfile(a.accessToken, accountRouting(a, localListener(config))) : null
+      a.type === 'oauth' && a.accessToken && !heldByServer(a) ? fetchProfile(a.accessToken, accountRouting(a, localListener(config))) : null
     )
   );
 
@@ -2291,7 +2343,10 @@ async function accountsCommand() {
     // OAuth account
     const hasProfile = p && !p.error;
     const tier = hasProfile ? (p.hasClaudeMax ? 'Max' : p.hasClaudePro ? 'Pro' : 'subscription') : null;
-    const status = hasProfile ? `Claude ${tier}` : `unknown (${p?.error || 'no token'})`;
+    const cfgTier = a.hasClaudeMax ? 'Claude Max' : a.hasClaudePro ? 'Claude Pro' : 'subscription';
+    const status = hasProfile ? `Claude ${tier}`
+      : heldByServer(a) ? `${cfgTier}, token renewed by the running server`
+      : `unknown (${p?.error || 'no token'})`;
     const src = a.source ? `, ${a.source}` : '';
     console.log(`  [${i + 1}] ${a.name} (${status}${src})`);
     if (hasProfile && p.email && p.email !== a.name) console.log(`       Email: ${p.email}`);
@@ -2459,8 +2514,9 @@ async function probeCommand() {
     }
   }
 
+  // [local patch 2026-10-28 원장] warmupCommand 와 같은 이유로 잠금 안에서 그 키만.
   applyOrExit(() => setProbeSeconds(config, seconds));
-  await saveConfig(config);
+  await atomicConfigUpdate(disk => { setProbeSeconds(disk, seconds); });
   console.log(seconds > 0
     ? `Quota probe set to every ${seconds}s (reads /api/oauth/usage; does not spend quota).`
     : 'Quota probe disabled (passive only).');
@@ -2496,9 +2552,11 @@ async function warmupCommand() {
       console.error(`Usage: octopus warmup ${arg} HH:MM --timezone Area/City`);
       process.exit(1);
     }
+    // [local patch 2026-10-28 원장] 통째로 덮어쓰지 않고 잠금 안에서 그 키만 바꾼다 — 서버가 방금
+    // 저장한 새 토큰을 읽어 둔 옛것으로 되돌리지 않게. 검사는 먼저(틀리면 파일을 건드리지 않고 끝).
     applyOrExit(() => setWarmupSchedule(config, arg, { resetTime, timezone }));
-    await saveConfig(config);
-    console.log(formatWarmupScheduleConfirmation(config.warmupSchedule));
+    const saved = await atomicConfigUpdate(disk => { setWarmupSchedule(disk, arg, { resetTime, timezone }); });
+    console.log(formatWarmupScheduleConfirmation(saved.warmupSchedule));
     await notifyRunningServer(config);
     return;
   }
@@ -2515,7 +2573,7 @@ async function warmupCommand() {
   }
 
   applyOrExit(() => setWarmupSeconds(config, seconds));
-  await saveConfig(config);
+  await atomicConfigUpdate(disk => { setWarmupSeconds(disk, seconds); });
   console.log(seconds > 0
     ? `Keep-warm set to every ${seconds}s (spawns a minimal \`claude\` per idle account; spends a little quota).`
     : 'Keep-warm disabled.');

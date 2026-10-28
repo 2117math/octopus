@@ -195,7 +195,8 @@ test('갱신기: 시작 직후 1회 읽고 구독 3필드를 저장, 6시간(간
   assert.equal(calls, after, 'stop 뒤에는 더 읽지 않는다');
 });
 
-test('갱신기: codex·disabled·프로필 없는 계정 제외, 동시 2개까지', async () => {
+// [local patch 2026-10-28 원장] 꺼 둔(disabled) 계정도 읽는다 — 구독이 남아 잠깐 안 쓰는 계정의 구독 정보를 계속 보려고.
+test('갱신기: codex·프로필 없는 계정 제외(꺼 둔 계정은 포함), 동시 2개까지', async () => {
   const am = new AccountManager([
     oauth('a@x.com'), oauth('b@x.com'), oauth('c@x.com'), oauth('d@x.com'),
     oauth('cx@x.com', { provider: 'codex', accountId: 'acct-1' }),
@@ -210,10 +211,10 @@ test('갱신기: codex·disabled·프로필 없는 계정 제외, 동시 2개까
   };
   const r = new SubscriptionRefresher(am, { profileFn, log: () => {} });
   await r.refreshAll();
-  assert.equal(seen.length, 4, 'codex 와 disabled 는 읽지 않는다');
+  assert.equal(seen.length, 5, 'codex 는 읽지 않고, 꺼 둔 계정은 읽는다');
   assert.equal(peak, 2, '동시 2개');
   assert.equal(am.accounts[4].subscriptionCreatedAt, null);
-  assert.equal(am.accounts[5].subscriptionCreatedAt, null);
+  assert.equal(am.accounts[5].subscriptionCreatedAt, CREATED, '꺼 둔 계정도 구독 정보가 들어온다');
   assert.equal(am.accounts[0].subscriptionCreatedAt, CREATED);
 });
 
