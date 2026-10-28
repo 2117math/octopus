@@ -5,6 +5,8 @@ import { createInterface } from 'node:readline';
 import { createWriteStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import net from 'node:net';
+import http from 'node:http';
+import https from 'node:https';
 import { loadOrCreateConfig, loadConfig, saveConfig, atomicConfigUpdate, getConfigPath, getCrashLogPath, loadState, saveState } from './config.js';
 import { installCrashHandlers } from './crash-log.js';
 import { AccountManager, distributionMode, accountRouting, rebalanceSetting } from './account-manager.js';
@@ -47,7 +49,7 @@ import { renderStatus, formatPercent } from './status-renderer.js';
 import { sanitizeText, safeLine } from './safe-text.js';
 import { modelLabel, modelFamily } from './model.js';
 import { ClientUsageTracker, UsageDimensionTracker } from './client-usage.js';
-import { buildClaudeEnvLines, bypassesAllHosts, clearSelfProxyEnvLines, encodePinComponent, LOCAL_LOGIN_HINT_WINDOW_MS, localLoginHint, mergeNoProxy, resolveClientMode } from './claude-env.js';
+import { buildClaudeEnvLines, bypassesAllHosts, clearSelfProxyEnvLines, encodePinComponent, LOCAL_LOGIN_HINT_WINDOW_MS, localLoginHint, mergeNoProxy, resolveClientMode, remoteServerOf, remoteClientEnv, remoteEnvLines } from './claude-env.js';
 import { serviceKind, installService, uninstallService, serviceStatus, renderService, logPath } from './service.js';
 import { formatTerminalTitle, titleSequence, TITLE_STACK_PUSH, TITLE_STACK_POP } from './terminal-title.js';
 import { getUpstreamProxy, describeProxy, describeSelfProxy, localListener, isSelfProxy } from './upstream-proxy.js';
@@ -249,6 +251,10 @@ switch (command) {
     break;
   case 'add':
     await addCommand();
+    process.exit(0);
+    break;
+  case 'remote':
+    await remoteCommand();
     process.exit(0);
     break;
   case 'focus':
@@ -1621,6 +1627,14 @@ async function envCommand() {
     process.exit(1);
   }
   const port = config.proxy.port;
+  // [local patch 2026-10-28 원장] 고정 서버가 있으면 그 서버로 가는 줄만 낸다(base-URL 방식).
+  const remote = remoteServerOf(config);
+  if (remote) {
+    const account = (process.env.TC_ACCT || '').trim() || null;
+    process.stdout.write(`${remoteEnvLines(remote, { account, localPort: port }).join('\n')}\n`);
+    process.stderr.write(`# Octopus env: 고정 서버 ${remote.url}${account ? ` (계정 고정: ${account})` : ''}\n`);
+    return;
+  }
   let useMitm;
   try {
     useMitm = resolveClientMode(config, args.slice(1)) === 'mitm';
@@ -1717,7 +1731,36 @@ async function runCommand() {
   // also pins (shipped in 1.1.10). TC_ACCT is the supported way now — it works in
   // MITM mode too, and keeps the pin out of the API path.
   const pinnedBase = isLocalAccountPin(process.env.ANTHROPIC_BASE_URL, port);
-  if (await isProxyUp(port)) {
+  // [local patch 2026-10-28 원장] 고정 서버(remoteServer, `octopus remote`): PC2 서버가 최우선.
+  // 이 PC 의 서버가 같이 켜져 있으면 물어보고(기본 PC2), PC2 가 안 잡힐 때만 이 PC 서버 → 직접 실행 순.
+  const remote = remoteServerOf(config);
+  const localUp = await isProxyUp(port);
+  /** @type {Record<string, any>} */
+  let runEnv = env;
+  let useLocal = !remote && localUp;
+  if (remote) {
+    const state = await remoteState(remote);
+    if (state === 'key') {
+      console.error(`[Octopus] 서버 ${remote.url} 가 키를 거절했습니다 — 'octopus remote' 로 키를 확인하세요.`);
+      process.exit(1);
+    }
+    let choice = state === 'ok' ? 'remote' : localUp ? 'local' : 'none';
+    if (state === 'ok' && localUp) choice = await askRemoteOrLocal(remote.url, port);
+    if (choice === 'remote') {
+      runEnv = remoteClientEnv(remote, env, { account: tcAcct || null, localPort: port });
+      console.error(`[Octopus] 서버 ${remote.url} 로 갑니다${tcAcct ? ` (계정 고정: ${tcAcct})` : ''}`);
+    } else if (choice === 'local') {
+      console.error(`[Octopus] 서버 ${remote.url} ${state === 'ok' ? '대신' : '가 안 잡혀서'} 이 PC 의 서버(localhost:${port})로 갑니다`);
+      useLocal = true;
+    } else if (autoFallback) {
+      console.error(`[Octopus] 서버 ${remote.url} 가 안 잡히고 이 PC 의 서버도 꺼져 있어 claude 를 바로 띄웁니다 (--auto-fallback)`);
+    } else {
+      console.error(`[Octopus] 서버 ${remote.url} 가 안 잡힙니다 (이 PC 의 서버도 꺼짐).`);
+      console.error('PC2 서버를 확인하거나, --auto-fallback 으로 claude 를 바로 띄우세요.');
+      process.exit(1);
+    }
+  }
+  if (useLocal) {
     if (useMitm) {
       // Route ALL of claude's traffic through us as an HTTPS forward proxy, so
       // even hardcoded api.anthropic.com endpoints (e.g. the design MCP) get the
@@ -1761,6 +1804,8 @@ async function runCommand() {
         env.ANTHROPIC_BASE_URL = `http://localhost:${port}`;
       }
     }
+  } else if (remote) {
+    // 고정 서버 쪽에서 이미 정했다(runEnv 또는 직접 실행).
   } else if (autoFallback) {
     console.error(`[Octopus] Proxy not running on port ${port} — launching claude directly (--auto-fallback; start it with: octopus server)`);
   } else {
@@ -1769,6 +1814,8 @@ async function runCommand() {
     console.error('Or pass --auto-fallback to launch claude directly (bypassing the proxy) when it is down.');
     process.exit(1);
   }
+  // 로컬 분기는 `env` 를 직접 고쳤고, 고정 서버 분기는 `runEnv` 를 새로 만들었다. 아래는 하나만 쓴다.
+  if (runEnv !== env) Object.assign(env, runEnv), Object.keys(env).forEach(k => { if (!(k in runEnv)) delete env[k]; });
 
   // If holdSeconds is set, ensure API_TIMEOUT_MS on the Claude Code side is
   // large enough for the hold to complete. Add 60s padding (one extra poll
@@ -3128,6 +3175,48 @@ async function addCommand() {
   await notifyRunningServer(config);
 }
 
+// ── remote (고정 서버) ──────────────────────────────────────
+
+// [local patch 2026-10-28 원장] 이 PC 의 `octopus run`/`env` 가 늘 쓸 서버(예: PC2). 설정 `remoteServer`.
+//   octopus remote                         현재 값과 지금 닿는지
+//   octopus remote <url> <apiKey>          지정 (예: octopus remote http://192.168.68.20:3456 tc-…)
+//   octopus remote --from <접속정보.json>   json 의 baseUrl·apiKey 로 지정
+//   octopus remote off                     해제(다시 이 PC 의 서버를 찾는다)
+async function remoteCommand() {
+  const config = await loadOrCreateConfig();
+  const a1 = args[1];
+  const show = async (/** @type {any} */ cfg) => {
+    const r = remoteServerOf(cfg);
+    if (!r) { console.log('고정 서버: 없음 (이 PC 의 서버 localhost:' + cfg.proxy.port + ' 를 찾아 씁니다)'); return; }
+    const state = await remoteState(r);
+    console.log(`고정 서버: ${r.url}  키: ${r.apiKey ? `${r.apiKey.slice(0, 6)}…` : '없음'}  지금: ${state === 'ok' ? '응답함' : state === 'key' ? '닿지만 키 거절' : '안 닿음'}`);
+  };
+  if (!a1) { await show(config); return; }
+  if (a1 === 'off') {
+    await atomicConfigUpdate((/** @type {any} */ d) => { delete d.remoteServer; });
+    console.log('고정 서버를 해제했습니다. 이제 이 PC 의 서버를 찾아 씁니다.');
+    return;
+  }
+  let url, apiKey;
+  if (a1 === '--from') {
+    const file = args[2];
+    if (!file) { console.error('Usage: octopus remote --from <octopus_pc2_접속정보.json>'); process.exit(1); }
+    let j;
+    try { j = JSON.parse(await readFile(file, 'utf8')); } catch (/** @type {any} */ err) { console.error(`읽지 못함: ${err.message}`); process.exit(1); }
+    url = j.baseUrl || (j.ip && j.port ? `http://${j.ip}:${j.port}` : '');
+    apiKey = j.apiKey || '';
+  } else {
+    url = a1; apiKey = args[2] || '';
+  }
+  const r = remoteServerOf({ remoteServer: { url, apiKey } });
+  if (!r) { console.error(`"${url}" 은 http(s)://주소:포트 모양이 아닙니다`); process.exit(1); }
+  if (!r.apiKey) { console.error('그 서버의 proxy.apiKey 가 필요합니다: octopus remote <url> <apiKey>'); process.exit(1); }
+  await atomicConfigUpdate((/** @type {any} */ d) => { d.remoteServer = { url: r.url, apiKey: r.apiKey }; });
+  console.log(`고정 서버를 ${r.url} 로 정했습니다. 이제 'claude'(octopus run) 는 이 PC 의 서버가 켜져 있어도 여기로 갑니다.`);
+  await show({ ...config, remoteServer: { url: r.url, apiKey: r.apiKey } });
+  console.log('지금 떠 있는 claude 창은 옛 주소를 들고 있으니 닫고 다시 띄우세요 (claude --resume).');
+}
+
 // ── focus ───────────────────────────────────────────────────
 
 // [local patch 2026-10-27 원장] 집중 계정: 구독 마지막 날 한 계정에 몰아서 쓰려고 지정한다.
@@ -3341,6 +3430,10 @@ Commands:
   focus [<name>|off]  Focus account: send everything there while it can serve
                       (no argument shows the current one)
   rename <name> <new> Rename an account, updating the routes that list it
+  remote [<url> <key>|--from <json>|off]
+                      Pin this PC's 'run'/'env' to another Octopus server (e.g.
+                      PC2) — used even when a local server is running (it asks
+                      when both are up). No argument shows the current one
   add <email|range>   Add name-only rows for accounts not paid for yet (결제 전;
                       range ai01-21@x.com); sign in on the row after paying
                       (--renew YYYY-MM-DD sets their renewal date)
@@ -3782,6 +3875,50 @@ async function notifyRunningServer(config) {
 // Quick liveness probe: is something listening on the local proxy port?
 // A successful TCP connect is enough (the proxy is local). Times out fast so a
 // down proxy doesn't add noticeable latency to `claude` launches via the alias.
+/**
+ * [local patch 2026-10-28 원장] 고정 서버가 받는지: 'ok'(200) · 'key'(닿지만 401/403) · 'down'(못 닿음·그 외).
+ * @param {{ url: string, apiKey: string }} remote
+ */
+async function remoteState(remote, timeoutMs = 2500) {
+  // fetch(undici) 대신 node:http — 바로 process.exit 하는 명령에서 undici 핸들이 닫히는 중에 죽는
+  // Windows libuv 단언(UV_HANDLE_CLOSING)을 피한다. agent 없이 한 번 쓰고 닫는다.
+  return new Promise(resolve => {
+    let url;
+    try { url = new URL(`${remote.url}/v1/models`); } catch { resolve('down'); return; }
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, {
+      method: 'GET', agent: false, timeout: timeoutMs,
+      headers: { 'x-api-key': remote.apiKey, 'anthropic-version': '2023-06-01', connection: 'close' },
+    }, res => {
+      res.resume();
+      res.on('end', () => {
+        const st = res.statusCode ?? 0;
+        resolve(st === 401 || st === 403 ? 'key' : st >= 200 && st < 500 ? 'ok' : 'down');
+      });
+      res.on('error', () => resolve('down'));
+    });
+    req.on('timeout', () => { req.destroy(); resolve('down'); });
+    req.on('error', () => resolve('down'));
+    req.end();
+  });
+}
+
+/**
+ * [local patch 2026-10-28 원장] 고정 서버와 이 PC 의 서버가 둘 다 켜져 있을 때 어디로 갈지 묻는다.
+ * 터미널이 아니면(파이프 등) 묻지 않고 고정 서버. Enter 만 치면 고정 서버.
+ * @returns {Promise<'remote'|'local'>}
+ */
+async function askRemoteOrLocal(remoteUrl, localPort) {
+  if (!process.stdin.isTTY || !process.stderr.isTTY) return 'remote';
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  console.error(`[Octopus] 이 PC 의 옥토퍼스 서버(localhost:${localPort})도 켜져 있습니다.`);
+  console.error(`  1. ${remoteUrl}  (PC2 서버 — 기본)`);
+  console.error(`  2. localhost:${localPort}  (이 PC 의 서버)`);
+  const answer = await new Promise(resolve => rl.question('어디로 갈까요? [1]: ', resolve));
+  rl.close();
+  return String(answer).trim() === '2' ? 'local' : 'remote';
+}
+
 function isProxyUp(port, timeout = 600) {
   return new Promise(resolve => {
     const socket = net.connect({ host: '127.0.0.1', port });

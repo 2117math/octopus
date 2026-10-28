@@ -239,3 +239,61 @@ export async function localLoginHint({ read, expired }) {
   if (expired(creds.expiresAt)) return STALE_LOGIN;
   return null;
 }
+
+// [local patch 2026-10-28 원장] 고정 서버(remoteServer): 이 PC 의 `octopus run`·`octopus env` 가
+// 자기 PC 의 서버가 켜져 있든 말든 늘 지정한 서버(예: PC2 http://192.168.68.20:3456)로 간다.
+//
+// 배경: 노트북(PC1)에서 `octopus server` 를 켰다 끄면, 그 사이에 띄운 claude 창들은 노트북
+// 서버를 보고 있다가 서버가 꺼지는 순간 전부 「connection refused」가 됐다. 설정 파일에
+//   "remoteServer": { "url": "http://192.168.68.20:3456", "apiKey": "<그 서버의 proxy.apiKey>" }
+// 가 있으면 run/env 는 로컬 서버 탐지를 건너뛰고 base-URL 방식으로 이 서버만 쓴다
+// (ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY). MITM 은 쓰지 않는다 — 다른 PC 의 인증서를 믿게 할 수 없다.
+
+/**
+ * 설정의 remoteServer 를 정규화한다. 없거나 모양이 틀리면 null.
+ * @param {any} config
+ * @returns {{ url: string, apiKey: string }|null}
+ */
+export function remoteServerOf(config) {
+  const r = config?.remoteServer;
+  if (!r || typeof r !== 'object') return null;
+  const raw = typeof r.url === 'string' ? r.url.trim() : '';
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  if (url.search || url.hash) return null;
+  const base = `${url.origin}${url.pathname.replace(/\/+$/, '')}`;
+  return { url: base, apiKey: typeof r.apiKey === 'string' ? r.apiKey.trim() : '' };
+}
+
+/**
+ * 고정 서버로 가는 claude 환경: ANTHROPIC_BASE_URL(계정 고정이면 /tc-acct/… 붙임)·ANTHROPIC_API_KEY 를
+ * 넣고, 이 PC 의 옥토퍼스가 남긴 loopback 프록시 변수만 걷어 낸다(회사 프록시 등 다른 값은 그대로).
+ * @param {{ url: string, apiKey: string }} remote
+ * @param {Record<string, string|undefined>} baseEnv
+ * @param {{ account?: string|null, localPort?: number|null }} [opts]
+ * @returns {Record<string, string|undefined>}
+ */
+export function remoteClientEnv(remote, baseEnv, { account = null, localPort = null } = {}) {
+  const env = { ...baseEnv };
+  env.ANTHROPIC_BASE_URL = account ? `${remote.url}/tc-acct/${encodePinComponent(account)}` : remote.url;
+  if (remote.apiKey) env.ANTHROPIC_API_KEY = remote.apiKey;
+  if (localPort != null) {
+    for (const name of SHELL_PROXY_VARS) if (pointsAtLoopback(env[name], localPort)) delete env[name];
+  }
+  delete env.TC_ACCT;
+  return env;
+}
+
+/**
+ * `octopus env` 용 export 줄(고정 서버).
+ * @param {{ url: string, apiKey: string }} remote
+ * @param {{ account?: string|null, localPort?: number|null, env?: Record<string, string|undefined> }} [opts]
+ */
+export function remoteEnvLines(remote, { account = null, localPort = null, env = process.env } = {}) {
+  const lines = [`export ANTHROPIC_BASE_URL=${shellQuote(account ? `${remote.url}/tc-acct/${encodePinComponent(account)}` : remote.url)}`];
+  if (remote.apiKey) lines.push(`export ANTHROPIC_API_KEY=${shellQuote(remote.apiKey)}`);
+  if (localPort != null) lines.push(...clearSelfProxyEnvLines(localPort, env));
+  if (account) lines.push('unset TC_ACCT');
+  return lines;
+}
