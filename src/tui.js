@@ -12,7 +12,7 @@ import { configIndexFor, managerAccountFor, markAccountRemoved, markAccountAdded
 import { PROVIDERS, providerOf, isSubscriptionAccount, upstreamFor } from './provider.js';
 import { mintAccountId } from './account-id.js';
 import { formatPercent, heldResetCredits, showSessionRow } from './status-renderer.js';
-import { subscriptionText } from './subscription.js';
+import { subscriptionText, isPrePlanProfile } from './subscription.js';
 import { scanLeftovers, killLeftovers, summarizeLeftovers, formatGB } from './cleanup.js';
 import { resolveMaxUsage, resolveMaxSpendMinor, switchThresholdDiffs, modelLabel, EFFORT_SEP, weeklyBucketForModel, modelFamily } from './model.js';
 import { parseProxyUrl, proxyToUrl, describeProxy, describeSelfProxy, resolveUpstreamProxy, setUpstreamProxy, getUpstreamProxy, localListener, isSelfProxy } from './upstream-proxy.js';
@@ -1571,6 +1571,11 @@ export class TUI {
     else if (k === 'd' && this.am.accounts.length > 0) {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
+    // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
+    // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
+    else if (k === 'o' && this.am.accounts.length > 0) {
+      this.mode = 'select'; this.selAction = 'reorder'; this.selIdx = this._arrangeable()[0] ?? 0; this.selReturn = 'normal';
+    }
     else if (k === 'p' && this.am.accounts.length > 0) { this._doProbe(); }
     // [local patch 2026-10-27 원장] W: 5시간 창이 안 도는 계정을 보여 주고 Enter 로 지금 켠다.
     else if (k === 'w' && this.am.accounts.length > 0) { this._openWarm(); }
@@ -2310,6 +2315,8 @@ export class TUI {
       } else {
         this._addLog(`Logged in "${acct.name}"`);
       }
+      // [local patch 2026-10-28 원장] 결제 전 계정: 꺼 둔 채 추적만, 결제되면 자동으로 켬.
+      if (outcome?.pendingPlan) this._addLog(`「${outcome.name || acct.name}」 결제 전(Pro/Max 아님) — 꺼 둔 채 추적만 하고, 결제가 확인되면 자동으로 켭니다 (R 로 바로 확인)`);
     } catch (/** @type {any} */ e) {
       // A cancel is the operator's own Esc: one line saying so, not a failure.
       this._addLog(e?.name === 'AbortError'
@@ -2803,6 +2810,8 @@ export class TUI {
         accessToken: creds.accessToken,
         refreshToken: creds.refreshToken,
         expiresAt: creds.expiresAt,
+        // [local patch 2026-10-28 원장] 결제 전 계정은 꺼 둔 채 넣는다(index.js upsertOAuthAccount 와 같은 규칙).
+        ...(isPrePlanProfile(profile) ? { disabled: true, pendingPlan: true } : {}),
       };
 
       // Same rule as the login path: a name match counts only where it is not
@@ -2915,6 +2924,13 @@ export class TUI {
     const acct = this.am.accounts[idx];
     const next = !acct.disabled;
     const cfgIdx = configIndexFor(this.config.accounts, this.am.accounts, idx);
+    // [local patch 2026-10-28 원장] 결제 전 표시가 있는 계정을 손으로 켜면 표시도 지운다(원장의 뜻이
+    // 분명하니 따르되, 결제가 안 됐으면 요청이 실패한다고 알린다). 명시적 false — 아래 disabled 와 같은 이유.
+    const wasPending = acct.pendingPlan === true;
+    if (wasPending && !next) {
+      acct.pendingPlan = false;
+      if (cfgIdx >= 0) this.config.accounts[cfgIdx].pendingPlan = false;
+    }
     this.am.setDisabled(idx, next); // re-enabling also clears a stuck error state
     // Write an explicit boolean (not delete): saveConfig merges over the on-disk
     // entry, so a `delete` would leave a stale `disabled: true` from disk intact.
@@ -2924,7 +2940,9 @@ export class TUI {
     // grey on screen.
     if (cfgIdx >= 0) this.config.accounts[cfgIdx].disabled = next;
     await this.saveConfig(this.config);
-    this._addLog(`${next ? 'Disabled' : 'Enabled'} account "${acct.name}"`);
+    this._addLog(wasPending && !next
+      ? `「${acct.name}」 결제 전 표시를 지우고 켰습니다 — 결제가 안 됐으면 요청이 실패합니다`
+      : `${next ? 'Disabled' : 'Enabled'} account "${acct.name}"`);
   }
 
   /** Move the selected account `delta` rows through the list as drawn.
@@ -4979,6 +4997,8 @@ export class TUI {
 
   /** 계정 상태 분류: ok · rest(5시간/주간 기준 이상) · error · off. */
   _koState(/** @type {any} */ a) {
+    // 결제 전에 미리 넣어 둔 계정(원장 2026-10-28): 꺼 둔 것과 같이 그리되 글자는 「결제 전」.
+    if (a.pendingPlan) return 'pending';
     if (a.disabled) return 'off';
     if (a.status === 'error') return 'error';
     const q = a.quota || {};
@@ -4992,8 +5012,8 @@ export class TUI {
     const accts = this.am.accounts;
     const states = accts.map((/** @type {any} */ a) => this._koState(a));
     const cnt = (/** @type {string} */ k) => states.filter((/** @type {string} */ x) => x === k).length;
-    const okN = cnt('ok'), restN = cnt('rest'), errN = cnt('error'), offN = cnt('off');
-    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}`;
+    const okN = cnt('ok'), restN = cnt('rest'), errN = cnt('error'), offN = cnt('off'), pendN = cnt('pending');
+    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}`;
     const focus = this._focusSeg();
     lines.push(focus && vw(summary) + vw(focus) + 3 <= W ? summary + ' '.repeat(W - vw(summary) - vw(focus) - 1) + focus : summary);
     const host = this._hostLine(W);
@@ -5046,13 +5066,14 @@ export class TUI {
       const mark = isSel ? cyan('>') : warmOn ? yellow('*') : (focusName && a.name === focusName ? orange('◎') : ' ');
       const nm = rpad(truncate(a.name.replace(KO_DOMAIN_RE, ''), nameW), nameW);
       const st = states[i];
-      const nameTxt = isSel ? bold(nm) : warmOn ? yellow(nm) : st === 'off' ? offGray(nm) : nm;
+      // 꺼 둔 계정과 결제 전 계정은 이름·막대·자동 점이 진한 회색.
+      const off = st === 'off' || st === 'pending';
+      const nameTxt = isSel ? bold(nm) : warmOn ? yellow(nm) : off ? offGray(nm) : nm;
       let body;
       // 언제부터인지 같이(서버를 다시 켜면 다시 시도한 시각) — 원장 2026-10-28.
       if (st === 'error') body = red(`⚠ 다시 로그인 필요 (L)${a.errorReason?.since ? ` · ${koClock(a.errorReason.since)}부터` : ''}`);
       else {
         // 꺼 둔 계정(원장 2026-10-28 「구독이 남아서 잠깐 안 쓰는 것」)도 막대·구독은 그대로, 색만 진한 회색.
-        const off = st === 'off';
         const paint = (/** @type {string} */ s) => off ? offGray(strip(s)) : s;
         const cells = [
           paint(bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn)),
@@ -5066,7 +5087,9 @@ export class TUI {
       }
       const subRaw = this._subscriptionTail(a, true).replace(/^ · 구독 /, '');
       const subT = subscriptionText(a?.subscription ?? (a?.subscriptionCreatedAt || a?.renewDate ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus, renewDate: a.renewDate } : null));
-      const sub = st === 'off' ? offGray(`${subRaw ? `${subRaw}  ` : ''}꺼 둠`)
+      // 결제 전 계정(원장 2026-10-28)은 구독 자리에 주황 「결제 전」 — 결제가 확인되면 저절로 켜진다.
+      const sub = st === 'pending' ? `${subRaw ? offGray(`${subRaw}  `) : ''}${orange('결제 전')}`
+        : st === 'off' ? offGray(`${subRaw ? `${subRaw}  ` : ''}꺼 둠`)
         : !subRaw ? '' : subT && subT.level >= 2 ? red(subRaw) : subT && subT.level === 1 ? orange(subRaw) : dim(subRaw);
       const bodyW = st === 'error' ? vw(strip(body)) : barsW;
       const pad = ' '.repeat(Math.max(0, barsW - bodyW));
@@ -5119,7 +5142,7 @@ export class TUI {
 
   _renderFooterKo() {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
-    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), k('D', '끄기/켜기'), ...(this.loginAccount ? [k('L', '로그인')] : []), k('P', '사용량조회')];
+    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), k('D', '끄기/켜기'), k('O', '순서'), ...(this.loginAccount ? [k('L', '로그인')] : []), k('P', '사용량조회')];
     const line2 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), k('B', '계정빼기'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('R', '새로고침'), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`];
   }
@@ -5171,6 +5194,8 @@ export class TUI {
         // commit and the other to throw away, and
         // offering "cancel" would promise an undo this screen does not have.
         if (this.selAction === 'reorder') {
+          // [local patch 2026-10-28 원장] 한글 화면: 어느 화살표가 위·아래인지 바로 보이게.
+          if (this._koLayout()) return ` ${dim('↑↓')} 고르기  ${bold('←')} 위로  ${bold('→')} 아래로  ${bold('Enter')}/${bold('Esc')} 끝 (옮기는 대로 저장)`;
           return ` ${dim('↑↓')} select  ${dim('←→')} move  ${bold('Enter')}/${bold('Esc')} done`;
         }
         if (this.selAction === 'login') {

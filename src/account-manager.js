@@ -15,7 +15,7 @@ import { safeLine } from './safe-text.js';
 import { parseRoutingUrl, describeRouting, routingToUrl, isRoutingFailure } from './account-routing.js';
 import { isSelfProxy } from './upstream-proxy.js';
 import { envVar } from './brand.js';
-import { nextRenewal, nextRenewalOnDate } from './subscription.js';
+import { nextRenewal, nextRenewalOnDate, isPaidProfile } from './subscription.js';
 /** @typedef {import('./session-tracker.js').Observation} Observation */
 
 // Re-exported for callers that import these model helpers from here.
@@ -388,6 +388,9 @@ function makeAccount(acct, index, listener = null) {
     // placed, which lists after every account that has been.
     displayOrder: Number.isFinite(acct.displayOrder) ? acct.displayOrder : null,
     disabled: acct.disabled || false,
+    // [local patch 2026-10-28 원장] 결제 전에 미리 넣어 둔 계정(로그인 때 Pro/Max 가 아니었음). 늘
+    // disabled 와 함께 다니며, 프로필에서 결제가 확인되면 applyProfileData 가 둘 다 푼다.
+    pendingPlan: acct.pendingPlan === true,
     maxUsage: acct.maxUsage ?? null,
     // Money cap in the account's currency (accounts[].maxSpend). Like maxUsage a
     // total, not a preference: at the cap the account receives nothing.
@@ -5119,6 +5122,14 @@ export class AccountManager {
     for (const field of ['organizationType', 'rateLimitTier', 'seatTier', 'hasClaudeMax', 'hasClaudePro', ...SUBSCRIPTION_FIELDS]) {
       if (profile[field] != null) account[field] = profile[field];
     }
+    // [local patch 2026-10-28 원장] 결제 전에 넣어 둔 계정이 결제됐으면(프로필이 Pro/Max/좌석을
+    // 분명히 말함) 표시를 지우고 켠다. 손으로 꺼 둔 계정(pendingPlan 없음)은 건드리지 않는다.
+    // 설정 파일 반영은 onPlanActivated 쪽(index.js)이 한다.
+    if (account.pendingPlan && isPaidProfile(profile)) {
+      account.pendingPlan = false;
+      this.setDisabled(accountIndex, false);
+      try { this._onPlanActivated?.(account); } catch { /* listener's problem */ }
+    }
   }
 
   /**
@@ -5338,6 +5349,15 @@ export class AccountManager {
    */
   onRefreshFailed(callback) {
     this._onRefreshFailed = callback;
+  }
+
+  /**
+   * [local patch 2026-10-28 원장] 결제 전(pendingPlan) 계정이 프로필에서 결제가 확인돼 켜졌을 때.
+   * 메모리는 이미 바뀐 뒤라, 듣는 쪽은 설정 파일 반영·알림만 하면 된다.
+   * @param {(account: Record<string, any>) => void} callback
+   */
+  onPlanActivated(callback) {
+    this._onPlanActivated = callback;
   }
 
   /** Replace the refresh coordinator (see the constructor option). */
@@ -5649,6 +5669,8 @@ export class AccountManager {
         // draws array order beside a server TUI drawing the arrangement.
         displayOrder: a.displayOrder ?? null,
         disabled: a.disabled || false,
+        // [local patch 2026-10-28 원장] 결제 전 계정 — attach 화면도 「결제 전」으로 그리게.
+        pendingPlan: a.pendingPlan === true,
         maxUsage: a.maxUsage ?? null,
         maxSpend: a.maxSpend ?? null,
         // Raw per-account override (issue #409), same shapes as the fleet-wide

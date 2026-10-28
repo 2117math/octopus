@@ -100,3 +100,24 @@ export function subscriptionText(sub, now) {
     source: manual ? 'manual' : 'estimate',
   };
 }
+
+/**
+ * [local patch 2026-10-28 원장] 결제 전(Pro·Max·좌석 Team 아님) 프로필인지.
+ * 프로필이 요금제 필드를 분명히 false 로 말할 때만 참 — 모르면(필드 없음·오류) 거짓.
+ * 원장이 결제 전에 계정을 미리 넣어 두는 데 쓴다: 로그인 때 참이면 꺼 둔 채 추적만 한다.
+ * @param {any} profile  normalizeProfile 결과
+ */
+export function isPrePlanProfile(profile) {
+  if (!profile || profile.error) return false;
+  return profile.hasClaudeMax === false && profile.hasClaudePro === false && !profile.seatTier;
+}
+
+/**
+ * [local patch 2026-10-28 원장] 결제된 요금제(Pro·Max, 또는 좌석이 있는 Team/Enterprise)로 보이는
+ * 프로필인지. 모르면 거짓 — 결제 전 계정을 자동으로 켜는 조건이라 분명할 때만.
+ * @param {any} profile
+ */
+export function isPaidProfile(profile) {
+  if (!profile || profile.error) return false;
+  return profile.hasClaudeMax === true || profile.hasClaudePro === true || !!profile.seatTier;
+}

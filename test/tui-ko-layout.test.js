@@ -147,3 +147,62 @@ test('B: 확인 뒤 커서를 옮기면 확인이 풀린다', () => {
   tui._key('enter');
   assert.deepEqual(removed, []);
 });
+
+test('koLayout: 결제 전 계정은 진한 회색 줄 + 주황 「결제 전」, 요약에 개수 (원장 2026-10-28)', () => {
+  const tui = makeTUI();
+  tui.am.accounts.push({ name: 'ai01@2117academy.com', index: 3, type: 'oauth', status: 'active', credential: 't', disabled: true, pendingPlan: true, quota: {} });
+  tui.config.accounts.push({ name: 'ai01@2117academy.com', type: 'oauth' });
+  const raw = renderRaw(tui);
+  const out = stripAnsi(raw);
+  assert.match(out, /^\s+ai01\s.*결제 전\s*$/m);
+  assert.doesNotMatch(out, /ai01.*꺼 둠/);
+  assert.match(out, /결제 전 1/);
+  assert.doesNotMatch(out, /꺼 둠 1/);
+  assert.match(raw, /\x1b\[38;5;208m결제 전/, '주황');
+  assert.match(raw, /\x1b\[38;5;242mai01/, '이름은 진한 회색');
+});
+
+test('D: 결제 전 계정을 손으로 켜면 표시를 지우고 알린다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.am.accounts.push({ name: 'ai01@2117academy.com', id: 'id-ai01', index: 3, type: 'oauth', status: 'active', credential: 't', disabled: true, pendingPlan: true, quota: {} });
+  tui.config.accounts.push({ name: 'ai01@2117academy.com', id: 'id-ai01', type: 'oauth' });
+  tui.am.setDisabled = (i, v) => { tui.am.accounts[i].disabled = v; };
+  await tui._doToggleDisabled(3);
+  assert.equal(tui.am.accounts[3].disabled, false);
+  assert.equal(tui.am.accounts[3].pendingPlan, false);
+  assert.equal(tui.config.accounts[3].pendingPlan, false);
+  assert.equal(tui.config.accounts[3].disabled, false);
+  assert.match(stripAnsi(tui.log[0].msg), /결제 전 표시를 지우고 켰습니다/);
+});
+
+test('L: 로그인 결과가 결제 전이면 알림에 그렇게 나온다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.loginAccount = async () => ({ name: 'c@gmail.com', action: 'updated', pendingPlan: true });
+  await tui._doLogin(2);
+  const msgs = tui.log.map(l => stripAnsi(l.msg));
+  assert.ok(msgs.some(m => /「c@gmail.com」 결제 전\(Pro\/Max 아님\)/.test(m)), JSON.stringify(msgs));
+});
+
+test('O(ㅐ): 계정 순서 바꾸기 — ← 위로 · → 아래로, Enter 로 끝내면 저장', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  tui._key('ㅐ');
+  assert.equal(tui.mode, 'select');
+  assert.equal(tui.selAction, 'reorder');
+  assert.equal(tui.am.accounts[tui.selIdx].name, 'a@gmail.com');
+  assert.match(stripAnsi(tui._renderFooter()), /← 위로\s+→ 아래로/);
+  tui._key('right'); // a 를 한 칸 아래로
+  const names = () => tui._displayOrder().map(i => tui.am.accounts[i].name);
+  assert.deepEqual(names(), ['b@gmail.com', 'a@gmail.com', 'c@gmail.com']);
+  tui._key('enter');
+  assert.equal(tui.mode, 'normal');
+  await tui._flushOrderSave();
+  await new Promise(r => setImmediate(r));
+  assert.equal(saved, 1);
+  assert.deepEqual(names(), ['b@gmail.com', 'a@gmail.com', 'c@gmail.com']);
+  assert.match(stripAnsi(tui._renderFooterKo().join('\n')), /O 순서/);
+});

@@ -26,7 +26,7 @@ import { loginCodex, startCodexLogin } from './codex-auth.js';
 import { isRemoteSession, openBrowser, PANEL_LOGIN_TIMEOUT_MS } from './login-flow.js';
 import { providerOf } from './provider.js';
 import { syncAccountsFromDisk } from './sync-accounts.js';
-import { nextRenewalOnDate } from './subscription.js';
+import { nextRenewalOnDate, isPrePlanProfile, isPaidProfile } from './subscription.js';
 import { mergeAccountsForSave, syncRefreshedTokens, removedAccountIds, clearRemovedAccountIds, clearAddedAccountIds, markAccountRemoved, configIndexFor } from './account-pairing.js';
 import { ensureAccountIds } from './account-id.js';
 import * as alias from './alias.js';
@@ -506,6 +506,22 @@ async function serverCommand() {
       : `${account.name} 갱신 실패(일시적, 다음 요청 때 다시) ${err?.status ?? ''} ${why}`);
   });
 
+  // [local patch 2026-10-28 원장] 결제 전에 미리 넣어 둔 계정이 결제됐다(프로필이 Pro/Max/좌석을
+  // 말함): 메모리는 applyProfileData 가 이미 켰고, 여기서는 설정 파일과 메모리의 설정 항목에서
+  // disabled·pendingPlan 을 지운다(항목은 명시적 false — saveConfig 가 항목을 디스크 위에 덮어쓰므로
+  // 지우기만 하면 디스크의 true 가 살아난다). 알림 한 줄(TUI 알림·headless 로그).
+  accountManager.onPlanActivated((account) => {
+    const tier = account.hasClaudeMax ? 'Max' : account.hasClaudePro ? 'Pro' : account.seatTier ? `Team(${account.seatTier})` : '결제됨';
+    const entry = account.id ? config.accounts.find((/** @type {any} */ c) => c?.id === account.id) : null;
+    if (entry) { entry.disabled = false; entry.pendingPlan = false; }
+    console.log(`[Octopus] "${safeLine(account.name, 64)}" 결제 확인(${tier}) — 자동으로 켰습니다`);
+    tokenLog(`${account.name} 결제 확인(${tier}) — 켬`);
+    atomicConfigUpdate((/** @type {any} */ disk) => {
+      const row = (disk.accounts || []).find((/** @type {any} */ r) => (account.id && r?.id === account.id) || (!account.id && r?.name === account.name));
+      if (row) { delete row.disabled; delete row.pendingPlan; }
+    }).catch((/** @type {any} */ err) => console.error(`[Octopus] "${safeLine(account.name, 64)}" 결제 확인을 설정 파일에 못 적음: ${err?.message || err}`));
+  });
+
   // Persist refreshed tokens back to config (re-read from disk to avoid clobbering
   // accounts added externally, e.g. by `teamclaude import` while server is running)
   accountManager.onTokenRefresh((idx, newTokens) => {
@@ -768,6 +784,8 @@ async function serverCommand() {
         if (!before.has(a)) tokenLog(`${a.name} 계정 추가`);
         else if (a.refreshToken && a.refreshToken !== before.get(a)) tokenLog(`${a.name} 설정 파일의 새 토큰으로 바꿈(로그인·새로고침)`);
       }
+      // [local patch 2026-10-28 원장] 결제 전 계정이 있으면 R(새로고침)·로그인 뒤에 결제 여부를 바로 본다.
+      subscriptionRefresher?.refreshPending().catch(() => {});
       return result;
     });
     reloading = next;
@@ -2348,7 +2366,9 @@ async function accountsCommand() {
       : heldByServer(a) ? `${cfgTier}, token renewed by the running server`
       : `unknown (${p?.error || 'no token'})`;
     const src = a.source ? `, ${a.source}` : '';
-    console.log(`  [${i + 1}] ${a.name} (${status}${src})`);
+    // [local patch 2026-10-28 원장] 결제 전에 넣어 둔 계정·손으로 꺼 둔 계정은 그렇게 보인다.
+    const held = a.pendingPlan ? ', 결제 전 — 꺼 둠' : a.disabled ? ', disabled' : '';
+    console.log(`  [${i + 1}] ${a.name} (${status}${src}${held})`);
     if (hasProfile && p.email && p.email !== a.name) console.log(`       Email: ${p.email}`);
     if (hasProfile && p.orgName) console.log(`       Org:   ${p.orgName}`);
     // The stable pin identity (TC_ACCT), unlike the display name above.
@@ -3481,8 +3501,11 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
   // read of the file: only this account's row (and, in the multi-org case, the
   // display name of its namesakes) changes; every other row stays as it is on
   // disk.
-  /** @type {{ action: 'updated' | 'added', name: string }} */
-  let outcome = { action: 'added', name: name || '' };
+  // [local patch 2026-10-28 원장] 결제 전(Pro/Max 아님) 계정도 미리 넣는다 — 꺼 둔 채(disabled) 추적만
+  // 하고, 결제가 확인되면 자동으로 켠다(account-manager applyProfileData → onPlanActivated).
+  const prePlan = isPrePlanProfile(profile);
+  /** @type {{ action: 'updated' | 'added', name: string, pendingPlan: boolean }} */
+  let outcome = { action: 'added', name: name || '', pendingPlan: prePlan };
   /** @type {Record<string, any>|null} */
   let signedIn = null;
   const config = await atomicConfigUpdate(config => {
@@ -3508,6 +3531,8 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
       // re-login updateAccountEntry spreads incoming over prev, so the routing
       // the entry already had survives instead of being silently cleared.
       ...(routing && storeRouting ? { routing: routingToUrl(routing) } : {}),
+      // 결제 전이면 꺼 둔 채 표시. 결제된 계정은 키를 안 넣어 손으로 꺼 둔 상태가 보존된다.
+      ...(prePlan ? { disabled: true, pendingPlan: true } : {}),
     };
 
     // Deduplicate by account+org identity (same email in a different org is a
@@ -3519,8 +3544,11 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
       // Same account+org: refresh credentials and org info, but keep the existing
       // display name, entry id, and any disk-only fields (e.g. importFrom).
       const prev = config.accounts[idx];
-      config.accounts[idx] = updateAccountEntry(prev, account);
-      outcome = { action: 'updated', name: prev.name };
+      const next = updateAccountEntry(prev, account);
+      // 결제 전이던 계정이 결제된 뒤 다시 로그인: 표시를 지우고 켠다(갱신기를 기다릴 것 없이).
+      if (prev.pendingPlan && !prePlan && isPaidProfile(profile)) { delete next.pendingPlan; delete next.disabled; }
+      config.accounts[idx] = next;
+      outcome = { action: 'updated', name: prev.name, pendingPlan: prePlan };
       if (storeRouting && !routing) delete config.accounts[idx].routing; // --routing none
       console.log(`Updated account "${prev.name}"`);
       if (!storeRouting) noteUnusedRouting(prev, routing);
@@ -3539,11 +3567,12 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
         }
       }
       config.accounts.push(account);
-      outcome = { action: 'added', name: account.name };
+      outcome = { action: 'added', name: account.name, pendingPlan: prePlan };
       console.log(`Added account "${account.name}"`);
     }
     signedIn = config.accounts[idx >= 0 ? idx : config.accounts.length - 1];
   });
+  if (prePlan) console.log(`"${safeLine(outcome.name, 64)}" 결제 전(Pro/Max 아님) — 꺼 둔 채 추적만 하고, 결제가 확인되면 자동으로 켭니다`);
   console.log(`Saved to ${getConfigPath()}`);
   // Before the server is told: its reload pass would otherwise read a tombstone
   // for an account that was just signed in again and remove it.
