@@ -1571,6 +1571,8 @@ export class TUI {
     else if (k === 'd' && this.am.accounts.length > 0) {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
+    // [local patch 2026-10-28 원장] N(ㅜ): 새 계정 로그인 — 줄을 고르지 않고 바로 브라우저 로그인.
+    else if (k === 'n' && this.loginAccount) { this._doLoginNew(); }
     // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
     // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
     else if (k === 'o' && this.am.accounts.length > 0) {
@@ -2322,6 +2324,37 @@ export class TUI {
       this._addLog(e?.name === 'AbortError'
         ? `Sign-in cancelled for "${acct.name}"`
         : `Login failed for "${acct.name}": ${e?.message || e}`);
+    } finally {
+      this._loggingIn = null;
+      if (this.login?.controller === controller) this._closeLogin();
+      if (this.running) this.render();
+    }
+  }
+
+  /** [local patch 2026-10-28 원장] N: 새 계정 로그인. 줄(계정)을 고르지 않고 바로 브라우저 로그인을
+   *  시작한다 — 로그인한 이메일로 새 줄이 생기고, 이미 있는 계정이면 그 줄의 로그인이 새로 된다.
+   *  나머지(패널·취소·한 번에 하나)는 _doLogin 과 같다. */
+  async _doLoginNew() {
+    if (!this.loginAccount) { this._addLog('Login unavailable'); return; }
+    if (this._loggingIn) { this._addLog(`Still waiting on the sign-in for "${this._loggingIn}"`); return; }
+    const label = '새 계정';
+    this._loggingIn = label;
+    const controller = new AbortController();
+    this._openLogin(label, controller);
+    try {
+      const outcome = await this.loginAccount(null, {
+        signal: controller.signal,
+        onPrompt: prompt => this._loginPrompted(controller, prompt),
+      });
+      const nm = outcome?.name || '?';
+      this._addLog(outcome?.action === 'updated'
+        ? `「${nm}」은 이미 있는 계정 — 그 줄의 로그인을 새로 했습니다`
+        : `「${nm}」 계정을 넣었습니다`);
+      if (outcome?.pendingPlan) this._addLog(`「${nm}」 결제 전(Pro/Max 아님) — 꺼 둔 채 추적만 하고, 결제가 확인되면 자동으로 켭니다 (R 로 바로 확인)`);
+    } catch (/** @type {any} */ e) {
+      this._addLog(e?.name === 'AbortError'
+        ? '새 계정 로그인을 취소했습니다'
+        : `새 계정 로그인 실패: ${e?.message || e}`);
     } finally {
       this._loggingIn = null;
       if (this.login?.controller === controller) this._closeLogin();
@@ -3129,7 +3162,8 @@ export class TUI {
       : left + ' '.repeat(Math.max(1, W - lw - rw)) + right);
     lines.push(' ' + dim('─'.repeat(W - 2)));
 
-    const footerH = this._koLayout() && this.mode === 'normal' && !this.remote ? 3 : 2;
+    // 한글 안내는 세 줄(쓰기 · 계정 관리 · 기타) — 원장 2026-10-28, 80칸에 두 줄로는 다 안 들어감.
+    const footerH = this._koLayout() && this.mode === 'normal' && !this.remote ? 4 : 2;
     // While a prompt is open (mode 'input') keep showing the screen it was
     // launched from, so e.g. adding a route stays on the routes screen rather
     // than flashing back to the main dashboard with just the footer prompt.
@@ -3271,7 +3305,7 @@ export class TUI {
 
     // ── Footer
     lines.push(' ' + dim('─'.repeat(W - 2)));
-    if (footerH === 3) lines.push(...this._renderFooterKo());
+    if (footerH > 2) lines.push(...this._renderFooterKo());
     else lines.push(this._renderFooter());
 
     // Write buffer
@@ -5142,9 +5176,11 @@ export class TUI {
 
   _renderFooterKo() {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
-    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), k('D', '끄기/켜기'), k('O', '순서'), ...(this.loginAccount ? [k('L', '로그인')] : []), k('P', '사용량조회')];
-    const line2 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), k('B', '계정빼기'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('R', '새로고침'), k('G', '설정'), k('Q', '종료')];
-    return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`];
+    // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
+    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
+    const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기')];
+    const line3 = [...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 
   _renderFooter() {
@@ -5152,7 +5188,7 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'warm': {
         const picks = this._warmPick || [];
         const names = picks.map(a => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');

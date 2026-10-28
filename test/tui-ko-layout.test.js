@@ -206,3 +206,45 @@ test('O(ㅐ): 계정 순서 바꾸기 — ← 위로 · → 아래로, Enter 로
   assert.deepEqual(names(), ['b@gmail.com', 'a@gmail.com', 'c@gmail.com']);
   assert.match(stripAnsi(tui._renderFooterKo().join('\n')), /O 순서/);
 });
+
+test('N(ㅜ): 새 계정 로그인 — 줄을 고르지 않고 바로 시작, 결과를 알림에 (원장 2026-10-28)', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  const calls = [];
+  tui.loginAccount = async (acct, opts) => { calls.push(acct); return { name: 'ai01@2117academy.com', action: 'added', pendingPlan: true }; };
+  tui._key('ㅜ');
+  await new Promise(r => setImmediate(r));
+  assert.deepEqual(calls, [null], '고른 계정 없이 부른다');
+  const msgs = tui.log.map(l => stripAnsi(l.msg));
+  assert.ok(msgs.some(m => m === '「ai01@2117academy.com」 계정을 넣었습니다'), JSON.stringify(msgs));
+  assert.ok(msgs.some(m => /「ai01@2117academy.com」 결제 전/.test(m)), JSON.stringify(msgs));
+  assert.equal(tui.mode, 'normal');
+  assert.equal(tui._loggingIn, null);
+});
+
+test('N: 이미 있는 계정으로 로그인하면 그렇게 알리고, 실패·취소도 한 줄', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.loginAccount = async () => ({ name: 'a@gmail.com', action: 'updated', pendingPlan: false });
+  await tui._doLoginNew();
+  assert.match(stripAnsi(tui.log[0].msg), /「a@gmail.com」은 이미 있는 계정/);
+  tui.loginAccount = async () => { const e = new Error('x'); e.name = 'AbortError'; throw e; };
+  await tui._doLoginNew();
+  assert.match(stripAnsi(tui.log[0].msg), /새 계정 로그인을 취소/);
+  tui.loginAccount = async () => { throw new Error('boom'); };
+  await tui._doLoginNew();
+  assert.match(stripAnsi(tui.log[0].msg), /새 계정 로그인 실패: boom/);
+});
+
+test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
+  const tui = makeTUI();
+  tui.warmNow = () => null;
+  tui._cleanupAvailable = () => true;
+  const lines = tui._renderFooterKo().map(stripAnsi);
+  assert.equal(lines.length, 3);
+  const vw = s => [...s].reduce((n, c) => n + (/[ᄀ-ᇿ㄰-㆏가-힯＀-￯]/.test(c) ? 2 : 1), 0);
+  for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
+  assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
+  assert.match(lines[1], /L 다시로그인\s+N 새계정\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기\s+H 다쓴계정 숨기기/);
+  assert.match(lines[2], /X 정리\s+G 설정\s+Q 종료/);
+});
