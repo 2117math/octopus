@@ -957,6 +957,8 @@ export class TUI {
     // [local patch 2026-10-27 원장] `w` 5시간 켜기(warmer.js warmTargets/warmNow). 없으면 안내만.
     warmCandidates = /** @type {(() => any[] | null) | null} */ (null),
     warmNow = /** @type {((targets: any[], opts?: any) => Promise<any[] | null> | null) | null} */ (null),
+    // [local patch 2026-10-28 원장] `a` 이름만 미리 넣기(config-ops addPlaceholderAccounts 를 잠금 안에서).
+    addPlaceholders = /** @type {((spec: string) => Promise<{ added: string[], skipped: string[] }>) | null} */ (null),
     // Cast so the destructured binding is the callback type, not `null`: index.js passes a function here.
     loginAccount = /** @type {LoginAccount | null} */ (null),
     activityLogPath = null,
@@ -1002,6 +1004,7 @@ export class TUI {
     this.probeQuota = probeQuota; // on-demand fleet-wide quota refresh (may be null)
     this.warmCandidates = warmCandidates;
     this.warmNow = warmNow;
+    this.addPlaceholders = addPlaceholders;
     /** @type {LoginAccount | null} */
     this.loginAccount = loginAccount; // (re-)login for a chosen account (may be null)
     this._env = env;
@@ -1573,6 +1576,8 @@ export class TUI {
     }
     // [local patch 2026-10-28 원장] N(ㅜ): 새 계정 로그인 — 줄을 고르지 않고 바로 브라우저 로그인.
     else if (k === 'n' && this.loginAccount) { this._doLoginNew(); }
+    // [local patch 2026-10-28 원장] A(ㅁ): 결제 전 계정을 이름만 미리 넣기(로그인 페이지가 Pro/Max 아니면 막으므로).
+    else if (k === 'a' && this.addPlaceholders) { this._openAddPlaceholders(); }
     // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
     // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
     else if (k === 'o' && this.am.accounts.length > 0) {
@@ -2301,6 +2306,8 @@ export class TUI {
     // ignored on the next reload and the account would land back in `error`.
     const entry = acct.id ? this.config?.accounts?.find((/** @type {any} */ c) => c.id === acct.id) : null;
     if (entry?.importFrom) { this._addLog(`"${acct.name}" reads its tokens from ${entry.importFrom} — sign in there instead`); return; }
+    // [local patch 2026-10-28 원장] 이름만 넣은 줄: 결제 전이면 로그인 페이지가 막는다고 미리 알린다(진행은 한다).
+    if (acct.placeholder) this._addLog(`「${acct.name.replace(KO_DOMAIN_RE, '')}」은 이름만 넣은 줄 — 결제(Pro/Max)가 안 됐으면 로그인 페이지가 막습니다`);
     // One at a time: a second flow would race the first for the browser, and
     // for Codex for the fixed callback port as well.
     if (this._loggingIn) { this._addLog(`Still waiting on the sign-in for "${this._loggingIn}"`); return; }
@@ -2329,6 +2336,31 @@ export class TUI {
       if (this.login?.controller === controller) this._closeLogin();
       if (this.running) this.render();
     }
+  }
+
+  /** [local patch 2026-10-28 원장] A: 결제 전 계정을 이름만 미리 넣기. 이메일 여러 개(쉼표·빈칸)나
+   *  범위(ai01-21@2117academy.com)를 받아 토큰 없는 「결제 전」 줄로 넣는다. 결제 뒤 그 줄에서 L. */
+  _openAddPlaceholders() {
+    this.mode = 'input';
+    this.inputReturn = 'normal';
+    this.inputPrompt = '미리 넣을 이메일 (여러 개는 쉼표, 범위는 ai01-21@2117academy.com)';
+    this.inputBuf = '';
+    this.inputSecret = false;
+    this.inputCb = v => { if (v && v.trim()) this._doAddPlaceholders(v.trim()); };
+  }
+
+  async _doAddPlaceholders(/** @type {string} */ spec) {
+    if (!this.addPlaceholders) { this._addLog('이름만 미리 넣기를 쓸 수 없습니다'); return; }
+    try {
+      const { added, skipped } = await this.addPlaceholders(spec);
+      const short = (/** @type {string[]} */ l) => l.map(n => n.replace(KO_DOMAIN_RE, '')).join(', ');
+      if (added.length) this._addLog(`결제 전 계정 ${added.length}개를 이름만 넣었습니다: ${short(added)} — 결제 뒤 그 줄에서 L 로 로그인`);
+      if (skipped.length) this._addLog(`이미 있어서 건너뜀 ${skipped.length}개: ${short(skipped)}`);
+      if (!added.length && !skipped.length) this._addLog('넣은 계정이 없습니다');
+    } catch (/** @type {any} */ e) {
+      this._addLog(`이름만 넣기 실패: ${e?.message || e}`);
+    }
+    if (this.running) this.render();
   }
 
   /** [local patch 2026-10-28 원장] N: 새 계정 로그인. 줄(계정)을 고르지 않고 바로 브라우저 로그인을
@@ -5121,8 +5153,9 @@ export class TUI {
       }
       const subRaw = this._subscriptionTail(a, true).replace(/^ · 구독 /, '');
       const subT = subscriptionText(a?.subscription ?? (a?.subscriptionCreatedAt || a?.renewDate ? { createdAt: a.subscriptionCreatedAt, status: a.subscriptionStatus, renewDate: a.renewDate } : null));
-      // 결제 전 계정(원장 2026-10-28)은 구독 자리에 주황 「결제 전」 — 결제가 확인되면 저절로 켜진다.
-      const sub = st === 'pending' ? `${subRaw ? offGray(`${subRaw}  `) : ''}${orange('결제 전')}`
+      // 결제 전 계정(원장 2026-10-28)은 구독 자리에 주황 「결제 전」 — 로그인된 것은 결제가 확인되면 저절로
+      // 켜지고, 이름만 넣은 줄(placeholder)은 결제 뒤 L 로 로그인해야 한다.
+      const sub = st === 'pending' ? `${subRaw ? offGray(`${subRaw}  `) : ''}${orange(a.placeholder ? '결제 전 · 결제 뒤 L' : '결제 전')}`
         : st === 'off' ? offGray(`${subRaw ? `${subRaw}  ` : ''}꺼 둠`)
         : !subRaw ? '' : subT && subT.level >= 2 ? red(subRaw) : subT && subT.level === 1 ? orange(subRaw) : dim(subRaw);
       const bodyW = st === 'error' ? vw(strip(body)) : barsW;
@@ -5178,8 +5211,8 @@ export class TUI {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
     // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
     const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
-    const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기')];
-    const line3 = [...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기')];
+    const line3 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 

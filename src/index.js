@@ -125,6 +125,7 @@ import {
   setAccountPriority,
   renameAccount,
   setFocusAccount,
+  addPlaceholderAccounts,
 } from './config-ops.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
@@ -244,6 +245,10 @@ switch (command) {
     break;
   case 'renew':
     await renewCommand();
+    process.exit(0);
+    break;
+  case 'add':
+    await addCommand();
     process.exit(0);
     break;
   case 'focus':
@@ -895,6 +900,14 @@ async function serverCommand() {
       // (켜기 간격·일정 설정과 별개). The warmer, too, is constructed after the TUI.
       warmCandidates: () => warmer?.warmTargets() ?? null,
       warmNow: (/** @type {any[]} */ targets, /** @type {any} */ opts) => warmer ? warmer.warmNow(targets, opts) : null,
+      // [local patch 2026-10-28 원장] `a` key: 결제 전 계정을 이름만 미리 넣는다(잠금 안에서 쓰고 바로 reload).
+      addPlaceholders: async (/** @type {string} */ spec) => {
+        /** @type {{ added: string[], skipped: string[] }|undefined} */
+        let result;
+        await atomicConfigUpdate((/** @type {any} */ disk) => { result = addPlaceholderAccounts(disk, spec); });
+        await reloadAccounts();
+        return result ?? { added: [], skipped: [] };
+      },
       // ctrl-c / q from the TUI: funnel through the same idempotent shutdown as
       // POSIX signals (defined below). In raw mode ctrl-c never reaches the OS as
       // a signal, so without this the process would only tear down via keypress.
@@ -2368,7 +2381,9 @@ async function accountsCommand() {
     const src = a.source ? `, ${a.source}` : '';
     // [local patch 2026-10-28 원장] 결제 전에 넣어 둔 계정·손으로 꺼 둔 계정은 그렇게 보인다.
     const held = a.pendingPlan ? ', 결제 전 — 꺼 둠' : a.disabled ? ', disabled' : '';
-    console.log(`  [${i + 1}] ${a.name} (${status}${src}${held})`);
+    console.log(a.placeholder
+      ? `  [${i + 1}] ${a.name} (결제 전 — 이름만, 결제 뒤 로그인)`
+      : `  [${i + 1}] ${a.name} (${status}${src}${held})`);
     if (hasProfile && p.email && p.email !== a.name) console.log(`       Email: ${p.email}`);
     if (hasProfile && p.orgName) console.log(`       Org:   ${p.orgName}`);
     // The stable pin identity (TC_ACCT), unlike the display name above.
@@ -3080,6 +3095,39 @@ async function renewCommand() {
   await notifyRunningServer(config);
 }
 
+// ── add (이름만 미리 넣기) ──────────────────────────────────
+
+// [local patch 2026-10-28 원장] 결제 전 계정을 이름만 미리 넣는다(config-ops.js addPlaceholderAccounts).
+// Anthropic 로그인 페이지가 Pro/Max 아닌 계정을 막으므로 토큰은 결제 뒤 L 로 받는다.
+async function addCommand() {
+  const config = await loadOrCreateConfig();
+  const spec = args.slice(1).filter(a => !a.startsWith('--') && a !== argValue('--renew')).join(' ');
+  const renewDate = argValue('--renew') || null;
+  if (!spec) {
+    console.error('Usage: octopus add <email|range> [<email|range> ...] [--renew YYYY-MM-DD]');
+    console.error('  range: ai01-21@2117academy.com  → ai01 … ai21 (zero-padded like the first number)');
+    console.error('Adds name-only rows (결제 전, disabled). After paying, sign in on that row (L, or: octopus login).');
+    process.exit(1);
+  }
+  if (renewDate && !nextRenewalOnDate(renewDate)) {
+    console.error(`"${renewDate}" is not a date — use YYYY-MM-DD`);
+    process.exit(1);
+  }
+  /** @type {{ added: string[], skipped: string[] }|undefined} */
+  let result;
+  try {
+    await atomicConfigUpdate((/** @type {any} */ disk) => { result = addPlaceholderAccounts(disk, spec, { renewDate }); });
+  } catch (/** @type {any} */ err) {
+    console.error(err?.message || String(err));
+    process.exit(1);
+  }
+  if (!result) process.exit(1);
+  for (const n of result.added) console.log(`Added "${n}" (결제 전 — 이름만, 결제 뒤 로그인)`);
+  for (const n of result.skipped) console.log(`Skipped "${n}" (already listed)`);
+  console.log(`${result.added.length} added, ${result.skipped.length} skipped. Saved to ${getConfigPath()}`);
+  await notifyRunningServer(config);
+}
+
 // ── focus ───────────────────────────────────────────────────
 
 // [local patch 2026-10-27 원장] 집중 계정: 구독 마지막 날 한 계정에 몰아서 쓰려고 지정한다.
@@ -3293,6 +3341,9 @@ Commands:
   focus [<name>|off]  Focus account: send everything there while it can serve
                       (no argument shows the current one)
   rename <name> <new> Rename an account, updating the routes that list it
+  add <email|range>   Add name-only rows for accounts not paid for yet (결제 전;
+                      range ai01-21@x.com); sign in on the row after paying
+                      (--renew YYYY-MM-DD sets their renewal date)
   route [list|add|rm] Per-model routing: pin model globs to specific accounts
                       (add <name> --match "<glob>" [--accounts "<name>"] [--bucket <b>])
   routing <name> [url|none]
@@ -3545,6 +3596,8 @@ async function upsertOAuthAccount(name, creds, source = 'unknown', routing = nul
       // display name, entry id, and any disk-only fields (e.g. importFrom).
       const prev = config.accounts[idx];
       const next = updateAccountEntry(prev, account);
+      // 이름만 미리 넣어 둔 줄(placeholder)에 토큰이 들어왔다: 빈 줄 표시를 지운다.
+      if (prev.placeholder) { delete next.placeholder; if (next.source === 'placeholder') next.source = source; }
       // 결제 전이던 계정이 결제된 뒤 다시 로그인: 표시를 지우고 켠다(갱신기를 기다릴 것 없이).
       if (prev.pendingPlan && !prePlan && isPaidProfile(profile)) { delete next.pendingPlan; delete next.disabled; }
       config.accounts[idx] = next;

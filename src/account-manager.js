@@ -391,6 +391,8 @@ function makeAccount(acct, index, listener = null) {
     // [local patch 2026-10-28 원장] 결제 전에 미리 넣어 둔 계정(로그인 때 Pro/Max 가 아니었음). 늘
     // disabled 와 함께 다니며, 프로필에서 결제가 확인되면 applyProfileData 가 둘 다 푼다.
     pendingPlan: acct.pendingPlan === true,
+    // 이름만 미리 넣은 줄(토큰 없음, 결제 뒤 L 로 채움). 늘 disabled·pendingPlan 과 함께.
+    placeholder: acct.placeholder === true,
     maxUsage: acct.maxUsage ?? null,
     // Money cap in the account's currency (accounts[].maxSpend). Like maxUsage a
     // total, not a preference: at the cap the account receives nothing.
@@ -5671,6 +5673,7 @@ export class AccountManager {
         disabled: a.disabled || false,
         // [local patch 2026-10-28 원장] 결제 전 계정 — attach 화면도 「결제 전」으로 그리게.
         pendingPlan: a.pendingPlan === true,
+        placeholder: a.placeholder === true,
         maxUsage: a.maxUsage ?? null,
         maxSpend: a.maxSpend ?? null,
         // Raw per-account override (issue #409), same shapes as the fleet-wide

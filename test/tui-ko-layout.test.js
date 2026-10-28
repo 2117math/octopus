@@ -239,12 +239,13 @@ test('N: 이미 있는 계정으로 로그인하면 그렇게 알리고, 실패�
 test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
   const tui = makeTUI();
   tui.warmNow = () => null;
+  tui.addPlaceholders = async () => ({ added: [], skipped: [] });
   tui._cleanupAvailable = () => true;
   const lines = tui._renderFooterKo().map(stripAnsi);
   assert.equal(lines.length, 3);
   const vw = s => [...s].reduce((n, c) => n + (/[ᄀ-ᇿ㄰-㆏가-힯＀-￯]/.test(c) ? 2 : 1), 0);
   for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
   assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
-  assert.match(lines[1], /L 다시로그인\s+N 새계정\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기\s+H 다쓴계정 숨기기/);
-  assert.match(lines[2], /X 정리\s+G 설정\s+Q 종료/);
+  assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기/);
+  assert.match(lines[2], /H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
 });

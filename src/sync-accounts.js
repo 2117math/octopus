@@ -120,6 +120,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
     mgr.renewDate = nextRenewalOnDate(diskAcct.renewDate) ? diskAcct.renewDate : null;
     // [local patch 2026-10-28 원장] 결제 전 표시도 디스크를 따른다(disabled 와 같은 식).
     mgr.pendingPlan = diskAcct.pendingPlan === true;
+    mgr.placeholder = diskAcct.placeholder === true;
     // Same for a per-account switch threshold (#409): thresholdFor() reads it
     // straight off the account, so a disk edit takes effect on the very next
     // selection without a restart, exactly like the fleet-wide setting does.
@@ -189,6 +190,7 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
       if (Number.isFinite(diskAcct.displayOrder)) cfgAcct.displayOrder = diskAcct.displayOrder; else delete cfgAcct.displayOrder;
       if (diskAcct.disabled) cfgAcct.disabled = true; else delete cfgAcct.disabled;
       if (diskAcct.pendingPlan === true) cfgAcct.pendingPlan = true; else delete cfgAcct.pendingPlan;
+      if (diskAcct.placeholder === true) cfgAcct.placeholder = true; else delete cfgAcct.placeholder;
       if (diskAcct.allowExtraUsage === true) cfgAcct.allowExtraUsage = true; else delete cfgAcct.allowExtraUsage;
       // Both polarities are mirrored, unlike the flags above: `false` is the
       // side of this key that does something, so a stale mirror of either value

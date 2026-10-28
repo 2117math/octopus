@@ -478,3 +478,70 @@ export function setFocusAccount(config, query, spec = {}) {
   config.focusAccount = account.name;
   return { name: account.name };
 }
+
+// [local patch 2026-10-28 원장] 결제 전 계정 「이름만 미리 넣기」.
+//
+// Anthropic 로그인 페이지가 Pro/Max 가 아닌 계정을 막아(「Claude Code에 연결하려면 Claude Max 또는
+// Pro가 필요합니다」) 결제 전에는 토큰을 받을 수 없다. 그래서 이름만 적은 빈 줄(placeholder) 을
+// 넣어 두고 — 꺼 둔 채(disabled) 「결제 전」 으로 보이고 요청·조회는 전혀 안 한다 — 결제 뒤 그 줄에서
+// L 로 로그인하면 upsertOAuthAccount 가 그 줄에 토큰을 넣고 표시를 지운다.
+
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+const RANGE_RE = /^([^\s@,;]*?)(\d+)\s*[-~]\s*(\d+)@([^\s@,;]+\.[^\s@,;]+)$/;
+const MAX_RANGE = 200;
+
+/**
+ * 「ai01-21@2117academy.com」 같은 범위, 쉼표·빈칸·세미콜론으로 나눈 여러 이메일을 이름 목록으로.
+ * 범위는 앞 숫자의 자릿수로 0 을 채운다(ai01-21 → ai01 … ai21). 같은 이름은 한 번만.
+ * @param {string} spec
+ * @returns {string[]}
+ */
+export function expandAccountNames(spec) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of String(spec || '').split(/[\s,;]+/)) {
+    const tok = raw.trim();
+    if (!tok) continue;
+    /** @type {string[]} */
+    let names;
+    const m = RANGE_RE.exec(tok);
+    if (m) {
+      const [, prefix, fromS, toS, domain] = m;
+      const from = Number(fromS), to = Number(toS);
+      if (!(to >= from)) throw new ConfigOpError(`"${tok}": 범위의 끝 번호가 시작보다 작습니다`);
+      if (to - from + 1 > MAX_RANGE) throw new ConfigOpError(`"${tok}": 한 번에 ${MAX_RANGE}개까지만`);
+      names = [];
+      for (let n = from; n <= to; n++) names.push(`${prefix}${String(n).padStart(fromS.length, '0')}@${domain}`);
+    } else if (EMAIL_RE.test(tok)) {
+      names = [tok];
+    } else {
+      throw new ConfigOpError(`"${tok}" 은 이메일이 아닙니다 (예: ai01@2117academy.com, 범위는 ai01-21@2117academy.com)`);
+    }
+    for (const n of names) if (!seen.has(n)) { seen.add(n); out.push(n); }
+  }
+  if (!out.length) throw new ConfigOpError('넣을 이메일이 없습니다');
+  return out;
+}
+
+/**
+ * 이름만 있는 빈 줄을 설정에 넣는다. 이미 있는 이름(표시 이름 또는 이메일)은 건너뛴다.
+ * @param {any} config
+ * @param {string} spec  expandAccountNames 가 받는 문자열
+ * @param {{ renewDate?: string|null }} [opts]
+ * @returns {{ added: string[], skipped: string[] }}
+ */
+export function addPlaceholderAccounts(config, spec, { renewDate = null } = {}) {
+  const names = expandAccountNames(spec);
+  if (!Array.isArray(config.accounts)) config.accounts = [];
+  const added = [], skipped = [];
+  for (const name of names) {
+    if (matchAccounts(config.accounts, name).length > 0) { skipped.push(name); continue; }
+    config.accounts.push({
+      name, type: 'oauth', source: 'placeholder',
+      placeholder: true, pendingPlan: true, disabled: true,
+      ...(renewDate ? { renewDate } : {}),
+    });
+    added.push(name);
+  }
+  return { added, skipped };
+}

@@ -44,6 +44,10 @@ export async function resolveAccounts(config) {
         }
       } else if (acct.accessToken) {
         accounts.push(acct);
+      } else if (acct.placeholder === true) {
+        // [local patch 2026-10-28 원장] 결제 전 「이름만 미리 넣은」 줄: 토큰 없이 꺼 둔 채 목록에만
+        // 둔다(config-ops.js addPlaceholderAccounts). 요청·조회 대상이 아니고, 결제 뒤 L 로 채운다.
+        accounts.push({ ...acct, disabled: true });
       } else {
         console.error(`No token for "${acct.name}", skipping`);
       }
