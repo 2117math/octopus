@@ -96,6 +96,21 @@ function clientSessionOf(key) {
   return cut < 0 ? key : key.slice(0, cut);
 }
 
+/** [local patch 2026-10-30 원장] 핀 목록을 계정별로 세어, 대화 수 많은 순 → 같으면 가장 먼저 핀된 순으로 계정 인덱스 배열.
+ *  @param {Array<{ idx: number, at: number }>} pins */
+export function rankPinnedAccounts(pins) {
+  /** @type {Map<number, { n: number, first: number }>} */
+  const by = new Map();
+  for (const pin of pins) {
+    const cur = by.get(pin.idx);
+    if (cur) { cur.n++; if (pin.at < cur.first) cur.first = pin.at; }
+    else by.set(pin.idx, { n: 1, first: pin.at });
+  }
+  return [...by.entries()]
+    .sort((a, b) => b[1].n - a[1].n || a[1].first - b[1].first || a[0] - b[0])
+    .map(([idx]) => idx);
+}
+
 function keyOf(key) {
   if (typeof key !== 'string' || key.length <= MAX_KEY_LENGTH) return key;
   return key.slice(0, MAX_KEY_LENGTH);
@@ -723,10 +738,9 @@ export class SessionTracker {
       if (k === key || clientSessionOf(k) !== sid || this._isExpired(s, now)) continue;
       for (const pin of s.pins.values()) pins.push(pin);
     }
-    pins.sort((a, b) => b.at - a.at);
-    const out = [];
-    for (const pin of pins) if (!out.includes(pin.idx)) out.push(pin.idx);
-    return out;
+    // [local patch 2026-10-30 원장] 「가장 최근 핀」이 아니라 다수결: 이 세션의 대화가 가장 많이 앉은 계정이
+    // 먼저, 같으면 가장 먼저 앉은 계정. 최근 순은 두 계정에 걸친 세션의 새 하위 대화를 번갈아 보냈다.
+    return rankPinnedAccounts(pins);
   }
 
   /**
@@ -857,12 +871,12 @@ export class SessionTracker {
       const id = s.sessionId || key;
       let g = groups.get(id);
       if (!g) {
-        g = { id, account: null, pinAt: -Infinity, seen: -Infinity, modelSeen: -Infinity, active: false, model: null, clientPinned: false };
+        g = { id, account: null, pins: [], seen: -Infinity, modelSeen: -Infinity, active: false, model: null, clientPinned: false };
         groups.set(id, g);
       }
-      for (const pin of s.pins.values()) {
-        if (pin.at > g.pinAt) { g.pinAt = pin.at; g.account = pin.idx; }
-      }
+      // [local patch 2026-10-30 원장] 화면의 계정 = 다수결(siblingAccounts 와 같은 규칙) — 두 계정에 걸친
+      // 세션 줄이 요청마다 왔다 갔다 하던 것.
+      for (const pin of s.pins.values()) g.pins.push(pin);
       if (this._isActive(s, now)) g.active = true;
       // The newest request speaks for the session: a pin the client sent on
       // its last request is the one in force now.
@@ -875,7 +889,7 @@ export class SessionTracker {
       .slice(0, limit)
       .map(g => ({
         id: g.id,
-        account: g.account,
+        account: g.pins.length ? rankPinnedAccounts(g.pins)[0] : null,
         lastSeen: Math.max(0, now - g.seen),
         active: g.active,
         model: g.model,

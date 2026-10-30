@@ -83,7 +83,8 @@ test('sessionList folds conversations into one row per session, newest first', (
   const rows = st.sessionList(clock.t);
   assert.deepEqual(rows.map(r => r.id), [OTHER, SID]);
   const [, mine] = rows;
-  assert.equal(mine.account, 1, 'the newest pin speaks for the session');
+  // [local patch 2026-10-30 원장] 다수결: 1대1 이면 먼저 앉은 계정(0)이 세션의 계정이다(옛 규칙은 최근 핀 1).
+  assert.equal(mine.account, 0, 'the majority (earliest on a tie) pin speaks for the session');
   assert.equal(mine.model, FABLE);
   assert.equal(mine.clientPinned, true);
   assert.equal(mine.active, false, 'idle past the active window');
