@@ -44,6 +44,7 @@
 
 31. 서버 켜진 채 쓰는 CLI 는 잠금 저장(2026-10-30 원장 「구독 날짜 업데이트·최대한 분산」): `renew`·`focus`(on/off)·`distribute` 가 `saveConfig(통째)` 대신 `atomicConfigUpdate` 로 그 키/그 줄만 바꾼다(23번 규칙 — 서버가 방금 저장한 토큰을 되돌리지 않게). 같은 날 적용한 값: 5개 계정 renewDate 2026-10-30, `distributeSessions: true`(새 세션은 부하 보고 골고루, 앉은 세션은 그대로 — 옮기면 스레드가 끊기므로 idle rebalance 는 켜지 않음), focus 없음. 빈 줄(placeholder) 보호: `account-manager.js` `unavailableReason` 이 placeholder 또는 토큰 없는 oauth 계정을 늘 'disabled' 로 — D 로 켜 놓아도 요청이 안 간다(전에는 Bearer undefined 로 401); `tui.js` `_doToggleDisabled` 는 placeholder 를 켜지 않고 「L 로 로그인하면 켜집니다」 안내, `_koState` 는 placeholder 를 pendingPlan 없이도 「결제 전」. 주의: 결제(구독 갱신)해도 주간 사용량은 초기화되지 않는다(7일 단위) — 분산을 켜도 주간이 남은 계정으로만 간다. 테스트 `placeholder-account` 2개 추가(11개).
 
+32. 하위 세션 분산 키 `K`(한글 ㅏ, 2026-10-30 원장 「한 세션 아래 에이전트들이 한 계정 사용량으로 가던 것을 분배하도록 켜고 끄는 버튼」): 설정 `sessionAffinity`(기본 true — 한 Claude Code 세션이 띄운 하위 에이전트는 부모 계정을 따른다, account-manager `_selectForSession` 의 siblingAccounts) 를 반전한다. `tui.js` `_toggleSessionAffinity`: `am.setSessionAffinity(next)` 로 즉시 적용 + `saveConfig`(index.js 의 TUI saveConfig 가 `sessionAffinity` 를 디스크에 씀), 실패하면 되돌림. 한글 안내 셋째 줄 맨 앞 `K 하위분산 켜기/끄기`(표시는 「켜기」= 지금 묶여 있음, 「끄기」= 지금 따로). 끄면(=분산 켬) 새 하위 대화는 `_pickLeastLoaded` 로 각각 배정되고, 이미 앉은 것은 그대로. 부작용: 하위 에이전트가 부모의 프롬프트 캐시를 못 쓴다. 2026-10-30 원장 PC2 설정에 `sessionAffinity: false` 를 잠금 안에서 써 넣고 reload 로 즉시 적용(doReload 가 반영). 테스트 `tui-ko-layout` 1개(+ 안내 폭 regex).
 7. 별칭: `octopus alias`는 `octopus`를 가리키고, 쉘 rc 표식 `# teamclaude alias`는 그대로다.
 
 ## 이름을 바꾸지 않은 것 (호환성)

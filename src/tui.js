@@ -1578,6 +1578,9 @@ export class TUI {
     else if (k === 'n' && this.loginAccount) { this._doLoginNew(); }
     // [local patch 2026-10-28 원장] A(ㅁ): 결제 전 계정을 이름만 미리 넣기(로그인 페이지가 Pro/Max 아니면 막으므로).
     else if (k === 'a' && this.addPlaceholders) { this._openAddPlaceholders(); }
+    // [local patch 2026-10-30 원장] K(ㅏ): 하위 세션 분산 — 한 세션이 띄운 하위 에이전트를 부모 계정에
+    // 묶어 두는 sessionAffinity 를 켜고 끈다(끄면 하위 대화도 각각 부하 적은 계정으로).
+    else if (k === 'k') { this._toggleSessionAffinity(); }
     // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
     // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
     else if (k === 'o' && this.am.accounts.length > 0) {
@@ -2734,6 +2737,26 @@ export class TUI {
     this.config.hostLine = on;
     if (!await this._saveSetting('host line', () => { this.config.hostLine = prev; })) return;
     this._addLog(`Host line: ${on ? 'on' : 'off'}`);
+    if (this.running) this.render();
+  }
+
+  /** [local patch 2026-10-30 원장] K: 하위 세션 분산 켜기/끄기 = 설정 `sessionAffinity` 반전. 서버에는
+   *  바로 적용(am.setSessionAffinity), 파일에는 saveConfig(index.js 가 sessionAffinity 를 디스크에 씀). */
+  async _toggleSessionAffinity() {
+    const prev = this.config.sessionAffinity !== false; // 없으면 켜진 것(기본)
+    const next = !prev;
+    this.config.sessionAffinity = next;
+    if (typeof this.am.setSessionAffinity === 'function') this.am.setSessionAffinity(next);
+    try { await this.saveConfig(this.config); }
+    catch (/** @type {any} */ e) {
+      this.config.sessionAffinity = prev;
+      if (typeof this.am.setSessionAffinity === 'function') this.am.setSessionAffinity(prev);
+      this._addLog(`Failed to save: ${e.message}`);
+      return;
+    }
+    this._addLog(next
+      ? '하위 세션 분산 끔 — 한 세션의 하위 에이전트는 부모와 같은 계정을 씁니다'
+      : '하위 세션 분산 켬 — 하위 에이전트도 각각 부하가 적은 계정으로 갑니다 (이미 앉은 것은 그대로)');
     if (this.running) this.render();
   }
 
@@ -5214,7 +5237,7 @@ export class TUI {
     // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
     const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
     const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기')];
-    const line3 = [k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 
@@ -5223,7 +5246,7 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('K')} ${this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'}  ${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'warm': {
         const picks = this._warmPick || [];
         const names = picks.map(a => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');

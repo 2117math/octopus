@@ -247,5 +247,27 @@ test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
   for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
   assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
   assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기/);
-  assert.match(lines[2], /H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
+  assert.match(lines[2], /K 하위분산 켜기\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
+});
+
+test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서버 즉시 적용 + 저장 (원장 2026-10-30)', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  const applied = [];
+  tui.am.setSessionAffinity = v => { applied.push(v); };
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /K 하위분산 켜기/);
+  tui._key('ㅏ');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.sessionAffinity, false);
+  assert.deepEqual(applied, [false]);
+  assert.equal(saved, 1);
+  assert.match(stripAnsi(tui.log[0].msg), /하위 세션 분산 켬/);
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /K 하위분산 끄기/);
+  tui._key('k');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.sessionAffinity, true);
+  assert.deepEqual(applied, [false, true]);
+  assert.match(stripAnsi(tui.log[0].msg), /하위 세션 분산 끔/);
 });

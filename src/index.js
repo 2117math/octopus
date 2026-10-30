@@ -856,6 +856,8 @@ async function serverCommand() {
         if (config.autoRedeemResets != null) diskConfig.autoRedeemResets = config.autoRedeemResets;
         if (config.blockedModels != null) diskConfig.blockedModels = config.blockedModels;
         if (config.sessionTitles != null) diskConfig.sessionTitles = config.sessionTitles;
+        // [local patch 2026-10-30 원장] K 키(하위 세션 분산): 서버는 setSessionAffinity 로 즉시, 파일에도 남긴다.
+        if (config.sessionAffinity != null) diskConfig.sessionAffinity = config.sessionAffinity;
         // Persist the route table (edited from the TUI routes screen).
         if (config.routes != null) diskConfig.routes = config.routes;
       }),
