@@ -2987,6 +2987,8 @@ export class TUI {
   async _doToggleDisabled(idx) {
     if (idx < 0 || idx >= this.am.accounts.length) return;
     const acct = this.am.accounts[idx];
+    // [local patch 2026-10-30 원장] 이름만 넣은 줄은 D 로 켤 수 없다 — 토큰이 없다. 결제됐으면 L 로 로그인하면 켜진다.
+    if (acct.placeholder) { this._addLog(`「${acct.name.replace(KO_DOMAIN_RE, '')}」은 이름만 넣은 줄 — 결제됐으면 L 로 로그인하면 켜집니다`); return; }
     const next = !acct.disabled;
     const cfgIdx = configIndexFor(this.config.accounts, this.am.accounts, idx);
     // [local patch 2026-10-28 원장] 결제 전 표시가 있는 계정을 손으로 켜면 표시도 지운다(원장의 뜻이
@@ -5064,7 +5066,7 @@ export class TUI {
   /** 계정 상태 분류: ok · rest(5시간/주간 기준 이상) · error · off. */
   _koState(/** @type {any} */ a) {
     // 결제 전에 미리 넣어 둔 계정(원장 2026-10-28): 꺼 둔 것과 같이 그리되 글자는 「결제 전」.
-    if (a.pendingPlan) return 'pending';
+    if (a.pendingPlan || a.placeholder) return 'pending';
     if (a.disabled) return 'off';
     if (a.status === 'error') return 'error';
     const q = a.quota || {};

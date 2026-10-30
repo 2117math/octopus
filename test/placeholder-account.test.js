@@ -156,3 +156,26 @@ test('TUI L: 빈 줄을 고르면 결제 전이면 막힌다고 먼저 알린다
   const msgs = tui.log.map(l => stripAnsi(l.msg));
   assert.ok(msgs.some(m => /「ai01」은 이름만 넣은 줄 — 결제\(Pro\/Max\)가 안 됐으면 로그인 페이지가 막습니다/.test(m)), JSON.stringify(msgs));
 });
+
+test('AccountManager: 빈 줄은 disabled 를 풀어도 unavailableReason 이 disabled 다 (D 로 켜도 요청이 안 간다)', () => {
+  const am = new AccountManager([
+    { name: 'ai01@2117academy.com', id: 'id-ai01', type: 'oauth', placeholder: true, pendingPlan: true, disabled: true },
+    oauth('b'),
+  ], 0.98);
+  am.setDisabled(0, false);
+  assert.equal(am.accounts[0].disabled, false);
+  assert.equal(am.unavailableReason(am.accounts[0]), 'disabled');
+  assert.equal(am.unavailableReason(am.accounts[1]), null);
+});
+
+test('TUI D: 빈 줄은 켜지지 않고 안내만, 상태는 pendingPlan 이 없어도 「결제 전」', async () => {
+  const { tui } = makeTUI();
+  tui.am.accounts[1].pendingPlan = false;
+  let toggled = 0;
+  tui.am.setDisabled = () => { toggled++; };
+  await tui._doToggleDisabled(1);
+  assert.equal(toggled, 0);
+  assert.equal(tui.am.accounts[1].disabled, true);
+  assert.match(stripAnsi(tui.log[0].msg), /「ai01」은 이름만 넣은 줄 — 결제됐으면 L 로 로그인하면 켜집니다/);
+  assert.equal(tui._koState(tui.am.accounts[1]), 'pending');
+});

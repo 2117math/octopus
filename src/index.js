@@ -2762,7 +2762,8 @@ async function distributeCommand() {
   // An unchanged setting is not rewritten — the config file is a
   // read-modify-write shared with the running server — but the server is still
   // notified, so a config that already says `on` can be made to take effect.
-  if (setDistribution(config, next)) await saveConfig(config);
+  // [local patch 2026-10-30 원장] 잠금 안에서 그 키만 바꾼다(서버가 켜진 채 통째 저장 금지 — CLAUDE.md 23).
+  if (setDistribution(config, next)) await atomicConfigUpdate((/** @type {any} */ disk) => { setDistribution(disk, next); });
   console.log(DISTRIBUTE_MODES[next].said);
   await notifyRunningServer(config);
 }
@@ -3125,17 +3126,23 @@ async function renewCommand() {
     process.exit(1);
   }
 
+  // [local patch 2026-10-30 원장] 서버가 켜진 채로도 안전하게: 통째 저장(saveConfig) 대신 잠금 안에서
+  // 그 계정 줄의 renewDate 만 바꾼다(서버가 방금 저장한 토큰을 되돌리지 않게 — CLAUDE.md 23).
+  const target = account;
+  const apply = (/** @type {any} */ disk) => {
+    const row = (disk.accounts || []).find((/** @type {any} */ r) => (target.id && r?.id === target.id) || r?.name === target.name);
+    if (!row) throw new Error(`Account "${target.name}" is no longer in the config`);
+    if (value === 'clear') delete row.renewDate; else row.renewDate = value;
+  };
   if (value === 'clear') {
-    delete account.renewDate;
-    await saveConfig(config);
+    await atomicConfigUpdate(apply);
     console.log(`Cleared the renewal date of "${account.name}" (the profile estimate is shown again).`);
   } else {
     if (!nextRenewalOnDate(value)) {
       console.error(`"${value}" is not a date — use YYYY-MM-DD, e.g. 2026-10-27`);
       process.exit(1);
     }
-    account.renewDate = value;
-    await saveConfig(config);
+    await atomicConfigUpdate(apply);
     const r = nextRenewalOnDate(value);
     console.log(`Set the renewal date of "${account.name}" to ${value} (next renewal in ${r?.daysLeft} days).`);
   }
@@ -3233,8 +3240,8 @@ async function focusCommand() {
   }
 
   if (name === 'off') {
-    delete config.focusAccount;
-    await saveConfig(config);
+    // [local patch 2026-10-30 원장] 잠금 안에서 그 키만(서버가 켜진 채 통째 저장 금지 — CLAUDE.md 23).
+    await atomicConfigUpdate((/** @type {any} */ disk) => { delete disk.focusAccount; });
     console.log('Focus account cleared (normal rotation rules apply).');
     await notifyRunningServer(config);
     return;
@@ -3248,8 +3255,8 @@ async function focusCommand() {
     process.exit(1);
   }
 
-  config.focusAccount = account.name;
-  await saveConfig(config);
+  const focusName = account.name;
+  await atomicConfigUpdate((/** @type {any} */ disk) => { disk.focusAccount = focusName; });
   console.log(`Focus account set to "${account.name}" — new and pinned sessions go there while it can serve.`);
   await notifyRunningServer(config);
 }

@@ -2835,6 +2835,9 @@ export class AccountManager {
 
     // Manually disabled accounts are skipped entirely until re-enabled.
     if (account.disabled) return 'disabled';
+    // [local patch 2026-10-30 원장] 이름만 넣은 줄(placeholder, 토큰 없음)은 켜 놓아도 절대 안 받는다 —
+    // D 로 켠 뒤 로그인 전에 뽑히면 Bearer undefined 로 나가 401 이 났다. 로그인하면 placeholder 가 빠진다.
+    if (account.placeholder || (account.type === 'oauth' && !account.credential)) return 'disabled';
 
     // An operator budget cap. Checked here, above every transient state, because
     // it is a decision rather than an estimate — and unlike the switch threshold
