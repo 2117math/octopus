@@ -218,6 +218,10 @@ export class Warmer {
   _isWarmCandidate(account) {
     if (!warmApplicable(account) || !account.credential) return false;
     if (account.disabled) return false;
+    // [local patch 2026-10-30 원장] 이름만 넣은 줄·요금제 거절(entitlement) 중인 계정은 켜 봐야 안 된다 —
+    // 그 계정에서 claude 가 120초 멈춰 sweep 전체를 잡아먹었다(mimath0626 구독 canceled).
+    if (account.placeholder) return false;
+    if (typeof this.am._entitlementDenied === 'function' && this.am._entitlementDenied(account)) return false;
     if (account.status === 'error' || account.status === 'exhausted' || account.status === 'throttled') return false;
     // [local patch 2026-10-28 원장] 주간을 다 쓴 계정은 켜 봐야 못 쓴다(TUI 의 W 와 같은 기준).
     const weekly = account.quota?.unified7d;

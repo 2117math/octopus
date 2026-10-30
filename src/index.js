@@ -795,8 +795,9 @@ async function serverCommand() {
         if (!before.has(a)) tokenLog(`${a.name} 계정 추가`);
         else if (a.refreshToken && a.refreshToken !== before.get(a)) tokenLog(`${a.name} 설정 파일의 새 토큰으로 바꿈(로그인·새로고침)`);
       }
-      // [local patch 2026-10-28 원장] 결제 전 계정이 있으면 R(새로고침)·로그인 뒤에 결제 여부를 바로 본다.
-      subscriptionRefresher?.refreshPending().catch(() => {});
+      // [local patch 2026-10-28 원장] R(새로고침)·로그인·설정 변경 뒤에 구독 상태(프로필)도 바로 다시 읽는다 —
+      // 계정마다 요청 한 번뿐이고, 결제 직후 「구독 상태: canceled」가 6시간 동안 남아 있던 일(2026-10-30).
+      subscriptionRefresher?.refreshAll().catch(() => {});
       return result;
     });
     reloading = next;

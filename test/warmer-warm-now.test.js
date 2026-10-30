@@ -79,3 +79,16 @@ test('warmNow: 다른 켜기가 돌고 있으면 null (겹쳐 돌지 않는다)'
   assert.equal(spawned, 1);
   assert.deepEqual(res.map(r => r.status), ['ok']);
 });
+
+test('keep-warm: 요금제 거절(entitlement) 중인 계정과 이름만 넣은 줄은 켜지 않는다 (원장 2026-10-30)', async () => {
+  // [local patch 2026-10-30 원장] 거절 중인 계정에서 claude 가 120초 멈춰 sweep 전체를 잡아먹었다.
+  const am = new AccountManager([oauth('a'), oauth('b'), oauth('c', { placeholder: true })], 0.98);
+  am._entitlementDenied = account => account.name === 'b';
+  const specs = [];
+  const warmer = makeWarmer(am, async spec => { specs.push(spec); return 0; });
+  assert.ok(am.accounts[2].credential, 'c 는 토큰이 있어도');
+  assert.deepEqual(warmer.warmTargets().map(a => a.name), ['a']);
+  await warmer.warmAll();
+  assert.equal(specs.length, 1);
+  assert.ok(specs[0].env.ANTHROPIC_BASE_URL.endsWith('/tc-acct/a'));
+});
