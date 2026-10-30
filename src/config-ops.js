@@ -1,4 +1,4 @@
-import { DEFAULT_SWITCH_THRESHOLD, distributionMode, rebalanceSetting, MIN_REBALANCE_IDLE_SECONDS } from './account-manager.js';
+import { DEFAULT_SWITCH_THRESHOLD, distributionMode, rebalanceSetting, MIN_REBALANCE_IDLE_SECONDS, accountAllowsExtraUsage } from './account-manager.js';
 import { matchAccounts } from './identity.js';
 import { THRESHOLD_BUCKET_KEYS, WEEKLY_BUCKET_KEYS } from './model.js';
 import { createRollingWarmupSchedule, resolveWarmupSchedule } from './warmup-schedule.js';
@@ -544,4 +544,43 @@ export function addPlaceholderAccounts(config, spec, { renewDate = null } = {}) 
     added.push(name);
   }
   return { added, skipped };
+}
+
+/**
+ * [local patch 2026-10-30 원장] 추가 사용(번들) 켜기/끄기 — 계정 줄의 `allowExtraUsage`(upstream 기능:
+ * 모든 계정이 다 찼을 때만 켜 둔 계정으로 유료 추가 사용, account-manager `_pickFallback`).
+ * `spec` 은 `all` 또는 계정 이름·이메일(쉼표로 여럿). 도메인 없는 짧은 이름(`mimath0626`)도 `이름@…` 으로 찾는다.
+ * 켜기는 `true`, 끄기는 키를 지운다(없는 키 = 끔이 기본). 이름만 넣은 줄(placeholder)과 추가 사용을 쓸 수
+ * 없는 줄(API 키·다른 백엔드 — accountAllowsExtraUsage 가 거부)은 건드리지 않고 skipped 로.
+ * @param {any} config
+ * @param {string} spec
+ * @param {boolean} on
+ * @returns {{ changed: string[], skipped: string[] }}
+ */
+export function setExtraUsage(config, spec, on) {
+  if (typeof on !== 'boolean') throw new ConfigOpError('on 또는 off 로 정하세요');
+  const accounts = Array.isArray(config.accounts) ? config.accounts : [];
+  const tokens = String(spec ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!tokens.length) throw new ConfigOpError('계정 이름 또는 all 을 적으세요');
+  /** @type {any[]} */
+  const targets = [];
+  const add = (/** @type {any} */ a) => { if (!targets.includes(a)) targets.push(a); };
+  for (const tok of tokens) {
+    if (tok === 'all') { for (const a of accounts) add(a); continue; }
+    let found = matchAccounts(accounts, tok);
+    if (!found.length) found = accounts.filter((/** @type {any} */ a) => typeof a?.name === 'string' && a.name.startsWith(`${tok}@`));
+    if (!found.length) throw new ConfigOpError(`"${tok}" 계정이 없습니다`);
+    if (found.length > 1) throw new ConfigOpError(`"${tok}" 이 계정 ${found.length}개에 맞습니다 — 전체 이름을 적으세요`);
+    add(found[0]);
+  }
+  /** @type {string[]} */ const changed = [];
+  /** @type {string[]} */ const skipped = [];
+  for (const a of targets) {
+    // 쓸 수 없는 줄도 끄기는 받는다 — 손으로 잘못 넣은 true 를 지울 수 있게.
+    const canBill = accountAllowsExtraUsage({ ...a, allowExtraUsage: true });
+    if (a.placeholder === true || (!canBill && (on || a.allowExtraUsage !== true))) { skipped.push(a.name); continue; }
+    if (on) a.allowExtraUsage = true; else delete a.allowExtraUsage;
+    changed.push(a.name);
+  }
+  return { changed, skipped };
 }

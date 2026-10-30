@@ -9,7 +9,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { loadOrCreateConfig, loadConfig, saveConfig, atomicConfigUpdate, getConfigPath, getCrashLogPath, loadState, saveState } from './config.js';
 import { installCrashHandlers } from './crash-log.js';
-import { AccountManager, distributionMode, accountRouting, rebalanceSetting } from './account-manager.js';
+import { AccountManager, distributionMode, accountRouting, rebalanceSetting, accountAllowsExtraUsage } from './account-manager.js';
 import { validateAdaptiveConfig } from './adaptive-distribution.js';
 import { createProxyServer, reloadedHeaderFlags } from './server.js';
 import { importCredentials, loginOAuth, loginOAuthWithPastedCode, startOAuthLogin, fetchProfile, profileForCredentials, refreshAccessToken, isTokenExpired, isTokenExpiringSoon } from './oauth.js';
@@ -39,7 +39,7 @@ import { ResetCreditRedeemer } from './codex-reset-credits.js';
 import { ClaudeResetRedeemer } from './claude-resets.js';
 import { Warmer, warmApplicable } from './warmer.js';
 import { formatWarmupScheduleConfirmation, resolveWarmupConfig } from './warmup-schedule.js';
-import { TUI, ACCOUNT_SORTS, displayWidth } from './tui.js';
+import { TUI, ACCOUNT_SORTS, displayWidth, extraUsageMoney } from './tui.js';
 import { SessionTitles } from './session-titles.js';
 import { captureEarlyConsole } from './early-log.js';
 import { RemoteControl, createAttachSession } from './tui-remote.js';
@@ -128,6 +128,7 @@ import {
   renameAccount,
   setFocusAccount,
   addPlaceholderAccounts,
+  setExtraUsage,
 } from './config-ops.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
@@ -158,6 +159,12 @@ const THRESHOLD_USAGE = [
 ].join('\n');
 
 const DISTRIBUTE_USAGE = 'Usage: octopus distribute <on|off|adaptive>';
+
+// [local patch 2026-10-30 원장] octopus extra — 추가 사용(번들) 켜기/끄기.
+const EXTRA_USAGE = [
+  'Usage: octopus extra                              계정별 추가 사용(번들) 상태',
+  '       octopus extra <all|이름[,이름]> on|off       켜기/끄기 (이름은 이메일, 도메인 없이도 됨)',
+].join('\n');
 
 const REBALANCE_USAGE = 'Usage: octopus rebalance <on|off|seconds>   (seconds: idle time before a move, min 60; 0 = off)';
 
@@ -247,6 +254,10 @@ switch (command) {
     break;
   case 'renew':
     await renewCommand();
+    process.exit(0);
+    break;
+  case 'extra':
+    await extraCommand();
     process.exit(0);
     break;
   case 'add':
@@ -2430,7 +2441,9 @@ async function accountsCommand() {
       : `unknown (${p?.error || 'no token'})`;
     const src = a.source ? `, ${a.source}` : '';
     // [local patch 2026-10-28 원장] 결제 전에 넣어 둔 계정·손으로 꺼 둔 계정은 그렇게 보인다.
-    const held = a.pendingPlan ? ', 결제 전 — 꺼 둠' : a.disabled ? ', disabled' : '';
+    const held = (a.pendingPlan ? ', 결제 전 — 꺼 둠' : a.disabled ? ', disabled' : '')
+      // [local patch 2026-10-30 원장] 추가 사용(번들)을 켜 둔 계정(octopus extra · TUI E).
+      + (a.allowExtraUsage === true ? ', 추가사용 켬' : '');
     console.log(a.placeholder
       ? `  [${i + 1}] ${a.name} (결제 전 — 이름만, 결제 뒤 로그인)`
       : `  [${i + 1}] ${a.name} (${status}${src}${held})`);
@@ -3152,6 +3165,98 @@ async function renewCommand() {
   await notifyRunningServer(config);
 }
 
+// ── extra (추가 사용 · 번들) ────────────────────────────────
+
+// [local patch 2026-10-30 원장] 계정마다 결제해 둔 추가 사용(번들)을 켜고 끈다. 켜 둔 계정은 모든 계정의
+// 사용량이 다 찼을 때만 유료 추가 사용으로 쓰인다(upstream allowExtraUsage · account-manager _pickFallback).
+// 바꾸기는 잠금 저장(atomicConfigUpdate — CLAUDE.md 23·31) 뒤 reload 로 즉시 적용. 금액은 서버가 5분마다
+// 읽는 /api/oauth/usage 의 spend(월 지출 한도·이번 달 쓴 돈)라 서버가 켜져 있을 때만 보인다.
+// 사용법 문자열 EXTRA_USAGE 는 dispatch 위(DISTRIBUTE_USAGE 옆) — 아래에 두면 TDZ.
+async function extraCommand() {
+  const config = await loadOrCreateConfig();
+  const spec = args[1];
+  if (spec === undefined) { await printExtraUsage(config); return; }
+  const val = String(args[2] ?? '').toLowerCase();
+  const on = ['on', 'true', 'yes', '1', '켬', '켜기'].includes(val) ? true
+    : ['off', 'false', 'no', '0', '끔', '끄기'].includes(val) ? false : null;
+  if (on === null) {
+    console.error(EXTRA_USAGE);
+    process.exit(1);
+  }
+  /** @type {{ changed: string[], skipped: string[] }|undefined} */
+  let result;
+  try {
+    await atomicConfigUpdate((/** @type {any} */ disk) => { result = setExtraUsage(disk, spec, on); });
+  } catch (/** @type {any} */ err) {
+    console.error(err?.message || String(err));
+    process.exit(1);
+  }
+  if (!result) process.exit(1);
+  for (const n of result.changed) console.log(`「${n}」 추가 사용(번들) ${on ? '켬 — 모든 계정이 다 찼을 때만 여기로 갑니다' : '끔'}`);
+  for (const n of result.skipped) console.log(`「${n}」 건너뜀 (결제 전 빈 줄이거나 추가 사용을 쓸 수 없는 계정)`);
+  console.log(`${result.changed.length}개 ${on ? '켬' : '끔'}, ${result.skipped.length}개 건너뜀. Saved to ${getConfigPath()}`);
+  await notifyRunningServer(config);
+}
+
+/** 서버의 /teamclaude/status, 못 읽으면 null. fetch(undici) 대신 node:http — remoteState 와 같은 이유. */
+function readLocalStatus(/** @type {any} */ config, timeoutMs = 3000) {
+  return new Promise(resolve => {
+    const port = config?.proxy?.port;
+    if (!port) { resolve(null); return; }
+    const req = http.request({
+      host: '127.0.0.1', port, path: '/teamclaude/status', method: 'GET', agent: false, timeout: timeoutMs,
+      headers: { 'x-api-key': config.proxy?.apiKey || '', connection: 'close' },
+    }, res => {
+      /** @type {Buffer[]} */
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        if (res.statusCode !== 200) { resolve(null); return; }
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { resolve(null); }
+      });
+      res.on('error', () => resolve(null));
+    });
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+/** `octopus extra`: 계정 · 켬/끔 · 남음 · 쓴 돈/한도 · Anthropic 쪽 상태. */
+async function printExtraUsage(/** @type {any} */ config) {
+  const accounts = Array.isArray(config.accounts) ? config.accounts : [];
+  if (!accounts.length) { console.log('No accounts configured.'); return; }
+  const status = await readLocalStatus(config);
+  /** @type {Map<string, any>} */
+  const live = new Map();
+  for (const a of Array.isArray(status?.accounts) ? status.accounts : []) if (a?.name) live.set(a.name, a);
+  const rows = accounts.map((/** @type {any} */ a) => {
+    const s = live.get(a.name);
+    const canBill = accountAllowsExtraUsage({ ...a, allowExtraUsage: true });
+    const state = a.placeholder ? '결제 전' : !canBill ? '해당 없음'
+      : a.allowExtraUsage === true ? (s?.onExtraUsage ? '켬·사용 중' : '켬') : '끔';
+    const spend = s?.quota?.spend ?? null;
+    const m = extraUsageMoney(spend, a.maxSpend ?? null);
+    const left = !status ? '서버 꺼짐' : m ? m.remaining : '—';
+    const spent = m ? m.spent : '';
+    const upstream = !spend ? '' : spend.enabled ? '허용'
+      : spend.userDisabled ? '꺼 둠(계정 설정)'
+      : `막힘${spend.disabledReason ? ` (${spend.disabledReason})` : ''}`;
+    return [a.name, state, left, spent, upstream];
+  });
+  const head = ['계정', '추가사용', '남음', '쓴 돈/한도', 'Anthropic'];
+  const widths = head.map((h, c) => Math.max(displayWidth(h), ...rows.map((/** @type {string[]} */ r) => displayWidth(r[c]))));
+  const pad = (/** @type {string} */ s, /** @type {number} */ w) => s + ' '.repeat(Math.max(0, w - displayWidth(s)));
+  const line = (/** @type {string[]} */ r) => `  ${r.map((s, c) => (c === r.length - 1 ? s : pad(s, widths[c]))).join('  ')}`.trimEnd();
+  console.log(line(head));
+  for (const r of rows) console.log(line(r));
+  console.log('');
+  console.log('켜기/끄기: octopus extra <all|이름[,이름]> on|off  (TUI 에서는 E)');
+  console.log('켜 둔 계정은 모든 계정의 사용량이 다 찼을 때만 유료 추가 사용으로 쓰입니다.');
+  console.log('남음 = 월 지출 한도 − 이번 달 쓴 돈 (Anthropic 이 잔액은 알려 주지 않음 — 한도를 산 크레딧에 맞추면 잔액과 같음).');
+  if (!status) console.log(`금액은 서버(localhost:${config.proxy?.port})가 켜져 있을 때만 보입니다.`);
+}
+
 // ── add (이름만 미리 넣기) ──────────────────────────────────
 
 // [local patch 2026-10-28 원장] 결제 전 계정을 이름만 미리 넣는다(config-ops.js addPlaceholderAccounts).
@@ -3447,6 +3552,8 @@ Commands:
   add <email|range>   Add name-only rows for accounts not paid for yet (결제 전;
                       range ai01-21@x.com); sign in on the row after paying
                       (--renew YYYY-MM-DD sets their renewal date)
+  extra [<all|account> on|off]
+                      추가 사용(번들) 켜기/끄기 — 모든 계정이 다 찼을 때만 유료 추가 사용으로
   route [list|add|rm] Per-model routing: pin model globs to specific accounts
                       (add <name> --match "<glob>" [--accounts "<name>"] [--bucket <b>])
   routing <name> [url|none]

@@ -21,7 +21,7 @@ import { sanitizeText, safeLine } from './safe-text.js';
 // The setting rules live in one module; the CLI, the MCP tools and this screen
 // all read them from there, so they cannot drift apart (#426).
 import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
-import { rebalanceSetting } from './account-manager.js';
+import { rebalanceSetting, accountAllowsExtraUsage } from './account-manager.js';
 import { sessionColorCode } from './session-color.js';
 import { DEFAULT_WIDTH as DEFAULT_TITLE_WIDTH } from './session-titles.js';
 import { isLocalUpstream } from './provider.js';
@@ -497,6 +497,62 @@ export function resetCreditTag(quota, now = Date.now()) {
 export function extraUsageTag(allowed, serving) {
   if (serving) return 'xu!';
   return allowed ? 'xu' : '';
+}
+
+// [local patch 2026-10-30 원장] 추가 사용(번들) 금액 — 한글 화면·E 키 알림·`octopus extra` 가 같이 쓴다.
+// 서버가 아는 것은 월 지출 한도(limitMinor, 또는 accounts[].maxSpend)와 이번 달 쓴 돈(usedMinor)뿐이라
+// (잔액 balance 는 API 가 null) 「남음」 = 한도 − 쓴 돈. 한도를 산 크레딧에 맞춰 두면 잔액과 같아진다.
+// 기호표는 formatMoney(oauth.js) 와 같다: 기호가 없는 통화는 숫자 뒤에 코드.
+const KO_CURRENCY_SYM = /** @type {Record<string, string>} */ ({ USD: '$', EUR: '€', GBP: '£', JPY: '¥' });
+/** 소수가 0이면 정수(`40`), 아니면 두 자리(`42.28`). @param {number} minor @param {any} spend */
+function koAmount(minor, spend) {
+  const v = minor / 10 ** (spend?.exponent ?? 2);
+  return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+/** @param {number} minor @param {any} spend */
+function koMoney(minor, spend) {
+  const sym = KO_CURRENCY_SYM[spend?.currency] || '';
+  const t = koAmount(minor, spend);
+  return sym ? `${sym}${t}` : `${t}${spend?.currency ? ` ${spend.currency}` : ''}`;
+}
+
+/**
+ * 추가 사용 금액 두 가지(색 없음): `remaining` = `남음 $957.72`(한도를 모르면 `씀 $42.28`),
+ * `spent` = `$42.28/40`(한도를 모르면 `$42.28`). spend 가 없으면 null.
+ * 한도는 accounts[].maxSpend 가 있으면 그것, 없으면 Anthropic 의 월 지출 한도(limitMinor).
+ * @param {any} spend  account.quota.spend (oauth.js normalizeSpend)
+ * @param {number | null} [maxSpend]
+ * @returns {{ remaining: string, spent: string, capMinor: number | null, usedMinor: number } | null}
+ */
+export function extraUsageMoney(spend, maxSpend = null) {
+  if (!spend || typeof spend !== 'object') return null;
+  const used = spend.usedMinor || 0;
+  const capMinor = resolveMaxSpendMinor(maxSpend, spend) ?? (typeof spend.limitMinor === 'number' ? spend.limitMinor : null);
+  return {
+    remaining: capMinor == null ? `씀 ${koMoney(used, spend)}` : `남음 ${koMoney(Math.max(0, capMinor - used), spend)}`,
+    spent: `${koMoney(used, spend)}${capMinor == null ? '' : `/${koAmount(capMinor, spend)}`}`,
+    capMinor,
+    usedMinor: used,
+  };
+}
+
+/**
+ * [local patch 2026-10-30 원장] 한글 화면 「번들」 칸: 추가 사용(번들) 상태 + 남은 금액(ANSI 색 포함).
+ * 사용 중(지금 추가 사용으로 서비스) 주황 · Anthropic 쪽에서 막힘(spend.enabled false) 빨강 — 이것만은
+ * 한도 초과가 보이게 `쓴 돈/한도` · 켬 녹색 · 끔(금액은 알 때만) 흐리게 · 아무것도 모르고 꺼져 있으면 ''.
+ * @param {any} a  계정(allowExtraUsage, maxSpend, quota.spend)
+ * @param {boolean} serving
+ */
+export function extraUsageKo(a, serving) {
+  const spend = a?.quota?.spend || null;
+  const allow = a?.allowExtraUsage === true;
+  const m = extraUsageMoney(spend, a?.maxSpend ?? null);
+  const left = m ? ` ${m.remaining}` : '';
+  if (serving) return orange(`사용 중${left}`);
+  if (allow && spend?.enabled === false) return red(`막힘${m ? ` ${m.spent}` : ''}`);
+  if (allow) return green(`켬${left}`);
+  if (m) return dim(`끔${left}`);
+  return '';
 }
 
 export function blockedFamilies(quota, threshold) {
@@ -1574,6 +1630,11 @@ export class TUI {
     else if (k === 'd' && this.am.accounts.length > 0) {
       this.mode = 'select'; this.selAction = 'toggle'; this.selIdx = this.am.currentIndex; this.selReturn = 'normal';
     }
+    // [local patch 2026-10-30 원장] E(ㄷ): 추가 사용(번들) 켜기/끄기 — 계정을 골라 Enter. 모든 계정이 다 찼을
+    // 때만 켜 둔 계정으로 유료 추가 사용(upstream allowExtraUsage · _pickFallback).
+    else if (k === 'e' && this.am.accounts.length > 0) {
+      this.mode = 'select'; this.selAction = 'extra'; this.selIdx = Math.max(0, this.am.currentIndex); this.selReturn = 'normal';
+    }
     // [local patch 2026-10-28 원장] N(ㅜ): 새 계정 로그인 — 줄을 고르지 않고 바로 브라우저 로그인.
     else if (k === 'n' && this.loginAccount) { this._doLoginNew(); }
     // [local patch 2026-10-28 원장] A(ㅁ): 결제 전 계정을 이름만 미리 넣기(로그인 페이지가 Pro/Max 아니면 막으므로).
@@ -2043,6 +2104,8 @@ export class TUI {
         this._doSwitchSelection();
       } else if (this.selAction === 'toggle') {
         this._doToggleDisabled(this.selIdx);
+      } else if (this.selAction === 'extra') {
+        this._doToggleExtraUsage(this.selIdx);
       } else if (this.selAction === 'login') {
         this._doLogin(this.selIdx);
       } else if (this.selAction === 'reorder') {
@@ -3033,6 +3096,41 @@ export class TUI {
     this._addLog(wasPending && !next
       ? `「${acct.name}」 결제 전 표시를 지우고 켰습니다 — 결제가 안 됐으면 요청이 실패합니다`
       : `${next ? 'Disabled' : 'Enabled'} account "${acct.name}"`);
+  }
+
+  /** [local patch 2026-10-30 원장] E: 계정의 추가 사용(번들) 허용 `allowExtraUsage` 켜기/끄기.
+   *  매니저 계정에 바로(_pickFallback 이 읽는다) + 그 계정 config 줄에 명시적 boolean(disabled 와 같은 이유 —
+   *  saveConfig 가 디스크 줄 위에 덮어쓰므로 delete 로는 디스크의 true 가 남는다) 후 saveConfig. 실패하면 되돌린다. */
+  async _doToggleExtraUsage(/** @type {number} */ idx) {
+    if (idx < 0 || idx >= this.am.accounts.length) return;
+    const acct = this.am.accounts[idx];
+    const next = acct.allowExtraUsage !== true;
+    if (next && (acct.placeholder || !acct.credential || !accountAllowsExtraUsage({ ...acct, allowExtraUsage: true }))) {
+      this._addLog(`「${acct.name}」은 추가 사용을 켤 수 없는 줄(결제 전·토큰 없음·OAuth 아님)`);
+      return;
+    }
+    const prevMgr = acct.allowExtraUsage;
+    const cfgIdx = configIndexFor(this.config.accounts, this.am.accounts, idx);
+    const row = cfgIdx >= 0 ? this.config.accounts[cfgIdx] : null;
+    const hadKey = !!row && Object.prototype.hasOwnProperty.call(row, 'allowExtraUsage');
+    const prevRow = row?.allowExtraUsage;
+    acct.allowExtraUsage = next;
+    if (row) row.allowExtraUsage = next;
+    try { await this.saveConfig(this.config); }
+    catch (/** @type {any} */ e) {
+      acct.allowExtraUsage = prevMgr;
+      if (row) { if (hadKey) row.allowExtraUsage = prevRow; else delete row.allowExtraUsage; }
+      this._addLog(`「${acct.name}」 추가 사용 저장 실패: ${e?.message || e}`);
+      if (this.running) this.render();
+      return;
+    }
+    if (next) {
+      const m = extraUsageMoney(acct.quota?.spend, acct.maxSpend ?? null);
+      this._addLog(`「${acct.name}」 추가 사용(번들) 켬 — 모든 계정이 다 찼을 때만 여기로 갑니다${m ? ` · ${m.remaining}` : ''}${acct.quota?.spend?.enabled === false ? ' · Anthropic 쪽에서 막혀 있음(한도 도달)' : ''}`);
+    } else {
+      this._addLog(`「${acct.name}」 추가 사용(번들) 끔`);
+    }
+    if (this.running) this.render();
   }
 
   /** Move the selected account `delta` rows through the list as drawn.
@@ -5104,7 +5202,10 @@ export class TUI {
     const states = accts.map((/** @type {any} */ a) => this._koState(a));
     const cnt = (/** @type {string} */ k) => states.filter((/** @type {string} */ x) => x === k).length;
     const okN = cnt('ok'), restN = cnt('rest'), errN = cnt('error'), offN = cnt('off'), pendN = cnt('pending');
-    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}`;
+    // [local patch 2026-10-30 원장] 추가 사용(번들)을 켜 둔 계정 수 · 지금 추가 사용으로 서비스 중인 계정 수.
+    const xuN = accts.filter((/** @type {any} */ a) => a.allowExtraUsage === true).length;
+    const xuServingN = accts.filter((/** @type {any} */ a) => this._onExtraUsage(a)).length;
+    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}${xuN ? ` · ${green(`추가사용 ${xuN}`)}` : ''}${xuServingN ? ` · ${orange(`추가사용 중 ${xuServingN}`)}` : ''}`;
     const focus = this._focusSeg();
     lines.push(focus && vw(summary) + vw(focus) + 3 <= W ? summary + ' '.repeat(W - vw(summary) - vw(focus) - 1) + focus : summary);
     const host = this._hostLine(W);
@@ -5143,7 +5244,11 @@ export class TUI {
     const dotCol = dotsW ? dotsW + 1 : 0;
     const hdr = cols.map(c => dim(rpad(c, BW)));
     hdr.splice(1, 0, (autoOn ? green : red)(rpad('자동', AUTO_W)));
-    lines.push(`  ${' '.repeat(nameW)}  ${' '.repeat(dotCol)}${hdr.join('  ')}  ${dim('구독')}`);
+    // 머리글은 줄을 다 만든 뒤 채운다 — 「번들」 칸이 구독 칸의 가장 넓은 줄 뒤에서 시작하도록(원장 2026-10-30).
+    const hdrAt = lines.length;
+    lines.push('');
+    /** @type {[string, string, string][]} */
+    const rows = [];
     const th = (/** @type {any} */ a, /** @type {string} */ b) => (typeof this.am.thresholdFor === 'function' ? this.am.thresholdFor(b, a) : null);
     const pctOn = true;
     // W: 켤 계정(확인 화면)·켜는 중인 계정은 노란 * 로.
@@ -5189,8 +5294,13 @@ export class TUI {
       const dots = mine.slice(0, DOT_MAX).map((/** @type {any} */ s) => fg(this._sessColor(s.id), '●')).join('')
         + (mine.length > DOT_MAX ? dim(`+${mine.length - DOT_MAX}`) : '');
       const dotCell = dotCol ? `${' '.repeat(Math.max(0, dotsW - vw(strip(dots))))}${dots} ` : '';
-      lines.push(truncate(`${mark} ${nameTxt}  ${dotCell}${body}${pad}  ${sub}`, W));
+      // [local patch 2026-10-30 원장] 구독 뒤 「번들」 칸: 추가 사용 켬/끔·남은 금액(빈 문자열이면 생략).
+      rows.push([`${mark} ${nameTxt}  ${dotCell}${body}${pad}`, sub, extraUsageKo(a, this._onExtraUsage(a))]);
     }
+    const withXu = rows.filter(r => r[2]);
+    const subW = Math.max(vw('구독'), ...withXu.map(r => vw(r[1])));
+    lines[hdrAt] = `  ${' '.repeat(nameW)}  ${' '.repeat(dotCol)}${hdr.join('  ')}  ${withXu.length ? `${rpad(dim('구독'), subW)}  ${dim('번들')}` : dim('구독')}`;
+    for (const [head, sub, xu] of rows) lines.push(truncate(xu ? `${head}  ${rpad(sub, subW)}  ${xu}` : `${head}  ${sub}`, W));
     const hidden = accts.length - order.length;
     if (hidden > 0) lines.push(dim(`  … 주간 다 쓴 계정 ${hidden}개 숨김 (H 로 보이기)`));
     if (this.mode !== 'normal') return;
@@ -5237,7 +5347,7 @@ export class TUI {
     // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
     const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
     const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기')];
-    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('E', '추가사용'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 
@@ -5300,6 +5410,9 @@ export class TUI {
           return this._removeArmed === this.selIdx
             ? ` ${red(`「${nm}」을 정말 뺄까요? 다시 쓰려면 다시 로그인해야 합니다.`)}  ${bold('Enter')} 빼기  ${bold('Esc')} 취소`
             : ` ${dim('↑↓')} 고르기  ${bold('Enter')} 이 계정 빼기  ${bold('Esc')} 취소`;
+        }
+        if (this.selAction === 'extra') {
+          return ` ${dim('↑↓')} 추가 사용을 켜고 끌 계정  ${bold('Enter')} 켜기/끄기  ${bold('Esc')} 취소  ${dim('· 모든 계정이 다 찼을 때만 유료')}`;
         }
         const act = this.selAction === 'toggle' ? 'enable/disable'
           : this.selAction === 'routing' ? 'set its proxy' : 'remove';

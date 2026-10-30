@@ -1,7 +1,7 @@
 // 한글 화면(koLayout) — 원장 2026-10-27 시안.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { TUI } from '../src/tui.js';
+import { TUI, extraUsageKo } from '../src/tui.js';
 
 const stripAnsi = s => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
 const H = 3600e3;
@@ -247,7 +247,7 @@ test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
   for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
   assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
   assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기/);
-  assert.match(lines[2], /K 하위분산 켜기\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
+  assert.match(lines[2], /K 하위분산 켜기\s+E 추가사용\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
 });
 
 test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서버 즉시 적용 + 저장 (원장 2026-10-30)', async () => {
@@ -270,4 +270,106 @@ test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서�
   assert.equal(tui.config.sessionAffinity, true);
   assert.deepEqual(applied, [false, true]);
   assert.match(stripAnsi(tui.log[0].msg), /하위 세션 분산 끔/);
+});
+
+// [원장 2026-10-30] 추가 사용(번들): 실측 PC2 — 월 지출 한도 $40(limitMinor 4000), 2117math 는 $42.28 로 막힘.
+const SPEND_OK = { enabled: true, usedMinor: 0, limitMinor: 4000, currency: 'USD', exponent: 2 };
+const SPEND_BLOCKED = { enabled: false, usedMinor: 4228, limitMinor: 4000, currency: 'USD', exponent: 2, disabledReason: 'org_level_disabled_until' };
+
+test('E(ㄷ): 추가 사용(번들) 켜기/끄기 — 계정 고르고 Enter, 매니저·설정 줄·저장·알림 (원장 2026-10-30)', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.am.accounts[0].id = 'id-a';
+  tui.config.accounts[0].id = 'id-a';
+  tui.am.accounts[0].quota.spend = { ...SPEND_OK };
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  tui._key('ㄷ');
+  assert.equal(tui.mode, 'select');
+  assert.equal(tui.selAction, 'extra');
+  assert.equal(tui.am.accounts[tui.selIdx].name, 'a@gmail.com');
+  assert.match(stripAnsi(tui._renderFooter()), /추가 사용을 켜고 끌 계정/);
+  tui._key('enter');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.mode, 'normal');
+  assert.equal(tui.am.accounts[0].allowExtraUsage, true);
+  assert.equal(tui.config.accounts[0].allowExtraUsage, true);
+  assert.equal(saved, 1);
+  assert.match(stripAnsi(tui.log[0].msg), /「a@gmail\.com」 추가 사용\(번들\) 켬 — 모든 계정이 다 찼을 때만 여기로 갑니다 · 남음 \$40$/);
+  tui._key('e');
+  tui._key('enter');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.am.accounts[0].allowExtraUsage, false);
+  assert.equal(tui.config.accounts[0].allowExtraUsage, false, '명시적 false — 디스크의 true 를 덮어쓰도록');
+  assert.equal(saved, 2);
+  assert.match(stripAnsi(tui.log[0].msg), /「a@gmail\.com」 추가 사용\(번들\) 끔$/);
+});
+
+test('E: Anthropic 쪽에서 막힌 계정을 켜면 알림에 같이 나오고, 저장이 실패하면 되돌린다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.am.accounts[1].id = 'id-b';
+  tui.config.accounts[1].id = 'id-b';
+  tui.am.accounts[1].quota.spend = { ...SPEND_BLOCKED };
+  await tui._doToggleExtraUsage(1);
+  assert.match(stripAnsi(tui.log[0].msg), /켬 .* · 남음 \$0 · Anthropic 쪽에서 막혀 있음\(한도 도달\)/);
+  tui.saveConfig = async () => { throw new Error('disk full'); };
+  await tui._doToggleExtraUsage(1);
+  assert.equal(tui.am.accounts[1].allowExtraUsage, true, '끄기 실패 → 켠 채로');
+  assert.equal(tui.config.accounts[1].allowExtraUsage, true);
+  assert.match(stripAnsi(tui.log[0].msg), /추가 사용 저장 실패: disk full/);
+});
+
+test('E: 이름만 넣은 줄(placeholder)·토큰 없는 줄은 켜지 않고 알린다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  tui.am.accounts.push({ name: 'ai01@2117academy.com', id: 'id-ai01', index: 3, type: 'oauth', status: 'active', disabled: true, pendingPlan: true, placeholder: true, quota: {} });
+  tui.config.accounts.push({ name: 'ai01@2117academy.com', id: 'id-ai01', type: 'oauth', placeholder: true });
+  tui._key('e');
+  tui.selIdx = 3;
+  tui._key('enter');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.am.accounts[3].allowExtraUsage, undefined);
+  assert.equal(tui.config.accounts[3].allowExtraUsage, undefined);
+  assert.equal(saved, 0);
+  assert.match(stripAnsi(tui.log[0].msg), /「ai01@2117academy\.com」은 추가 사용을 켤 수 없는 줄/);
+  tui.am.accounts.push({ name: 'k@x.com', id: 'id-k', index: 4, type: 'apikey', status: 'active', credential: 'sk', quota: {} });
+  tui.config.accounts.push({ name: 'k@x.com', id: 'id-k', type: 'apikey' });
+  await tui._doToggleExtraUsage(4);
+  assert.equal(tui.am.accounts[4].allowExtraUsage, undefined);
+  assert.equal(saved, 0);
+});
+
+test('koLayout: 구독 오른쪽 「번들」 칸 — 켬 남음 $40, 요약에 추가사용 개수', () => {
+  const tui = makeTUI();
+  tui.am.accounts[0].allowExtraUsage = true;
+  tui.am.accounts[0].quota.spend = { ...SPEND_OK };
+  const raw = renderRaw(tui);
+  const out = stripAnsi(raw);
+  assert.match(out, /5시간\s+자동\s+일주일\s+구독\s+번들/);
+  assert.match(out, /^\s+a\s+50%.*켬 남음 \$40\s*$/m);
+  assert.match(raw, /\x1b\[32m켬 남음 \$40/, '녹색');
+  assert.match(out, /· 추가사용 1/);
+  assert.doesNotMatch(out, /추가사용 중/);
+  // 아무 계정도 금액·허용이 없으면 칸도 머리글도 없다.
+  const plain = renderToString(makeTUI());
+  assert.doesNotMatch(plain, /번들|· 추가사용/);
+});
+
+test('extraUsageKo: 사용 중 · 막힘(쓴 돈/한도) · 켬 · 끔 · 모름', () => {
+  const s = x => stripAnsi(x);
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, quota: { spend: SPEND_OK } }, true)), '사용 중 남음 $40');
+  assert.match(extraUsageKo({ allowExtraUsage: true, quota: { spend: SPEND_OK } }, true), /^\x1b\[38;5;208m/, '주황');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, quota: { spend: SPEND_BLOCKED } }, false)), '막힘 $42.28/40');
+  assert.match(extraUsageKo({ allowExtraUsage: true, quota: { spend: SPEND_BLOCKED } }, false), /^\x1b\[31m/, '빨강');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: false, quota: { spend: SPEND_OK } }, false)), '끔 남음 $40');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: false, quota: { spend: SPEND_BLOCKED } }, false)), '끔 남음 $0');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, quota: { spend: { ...SPEND_OK, limitMinor: 100000, usedMinor: 4228 } } }, false)), '켬 남음 $957.72');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, quota: { spend: { ...SPEND_OK, limitMinor: null, usedMinor: 4228 } } }, false)), '켬 씀 $42.28');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, maxSpend: 20, quota: { spend: SPEND_OK } }, false)), '켬 남음 $20', 'maxSpend 가 한도');
+  assert.equal(s(extraUsageKo({ allowExtraUsage: true, quota: {} }, false)), '켬');
+  assert.equal(extraUsageKo({ allowExtraUsage: false, quota: {} }, false), '');
+  assert.equal(extraUsageKo({ quota: { spend: null } }, false), '');
 });
