@@ -21,7 +21,7 @@ import { sanitizeText, safeLine } from './safe-text.js';
 // The setting rules live in one module; the CLI, the MCP tools and this screen
 // all read them from there, so they cannot drift apart (#426).
 import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
-import { rebalanceSetting, accountAllowsExtraUsage } from './account-manager.js';
+import { rebalanceSetting, accountAllowsExtraUsage, distributionMode } from './account-manager.js';
 import { sessionColorCode } from './session-color.js';
 import { DEFAULT_WIDTH as DEFAULT_TITLE_WIDTH } from './session-titles.js';
 import { isLocalUpstream } from './provider.js';
@@ -1642,6 +1642,8 @@ export class TUI {
     // [local patch 2026-10-30 원장] K(ㅏ): 하위 세션 분산 — 한 세션이 띄운 하위 에이전트를 부모 계정에
     // 묶어 두는 sessionAffinity 를 켜고 끈다(끄면 하위 대화도 각각 부하 적은 계정으로).
     else if (k === 'k') { this._toggleSessionAffinity(); }
+    // [local patch 2026-11-02 원장] T(ㅅ): 새 대화 배정 「소진우선」 켜기/끄기(distributeSessions 'adaptive' ↔ true).
+    else if (k === 't') { this._toggleDrainFirst(); }
     // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
     // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
     else if (k === 'o' && this.am.accounts.length > 0) {
@@ -2820,6 +2822,37 @@ export class TUI {
     this._addLog(next
       ? '하위 세션 분산 끔 — 한 세션의 하위 에이전트는 부모와 같은 계정을 씁니다'
       : '하위 세션 분산 켬 — 하위 에이전트도 각각 부하가 적은 계정으로 갑니다 (이미 앉은 것은 그대로)');
+    if (this.running) this.render();
+  }
+
+  /** [local patch 2026-11-02 원장] 새 대화 배정 모드 'off'|'even'|'adaptive' — 매니저 값(attach 모드는 서버
+   *  상태), 매니저에 없으면 설정 `distributeSessions` 로 판정. */
+  _distMode() {
+    const m = this.am?.distributionMode;
+    return typeof m === 'string' ? m : distributionMode(this.config?.distributeSessions);
+  }
+
+  /** [local patch 2026-11-02 원장] T(ㅅ): 「소진우선」 켜기/끄기 = 설정 `distributeSessions` 를 'adaptive'(남은
+   *  주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로) ↔ true(균등 — 부하 적은 계정으로 골고루).
+   *  끔(false·없음)에서 누르면 소진우선, 소진우선을 끄면 늘 균등(원장 기본). 서버에는 바로 적용
+   *  (am.setDistributeSessions), 파일에는 saveConfig(index.js 가 distributeSessions 를 디스크에 씀), 실패하면 되돌림.
+   *  바뀌는 것은 새 대화를 어느 계정에 앉힐지뿐 — 이미 열린 대화는 자기 계정에 고정된 채 옮기지 않는다(균등↔소진우선
+   *  전환은 drain 도 없음). 하위분산(K, sessionAffinity)과는 다른 기능. */
+  async _toggleDrainFirst() {
+    const prev = this.config.distributeSessions;
+    const next = distributionMode(prev) === 'adaptive' ? true : 'adaptive';
+    this.config.distributeSessions = next;
+    this.am.setDistributeSessions?.(next);
+    try { await this.saveConfig(this.config); }
+    catch (/** @type {any} */ e) {
+      this.config.distributeSessions = prev;
+      this.am.setDistributeSessions?.(prev);
+      this._addLog(`새 대화 배정 저장 실패: ${e.message}`);
+      return;
+    }
+    this._addLog(next === 'adaptive'
+      ? '새 대화 배정: 소진우선 켬 — 남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로 갑니다'
+      : '새 대화 배정: 소진우선 끔 — 새 대화는 부하가 적은 계정으로 골고루 갑니다(균등)');
     if (this.running) this.render();
   }
 
@@ -4794,6 +4827,8 @@ export class TUI {
     lines.push(row(byId('rebalance')));
     lines.push(dim('  A session back from a break (its cache gone) moves to a less-spent'));
     lines.push(dim('  account. Acts only with session distribution on.'));
+    // [local patch 2026-11-02 원장] 기본 화면의 T(ㅅ) 키 안내.
+    lines.push(dim('  T 소진우선: 켜면 남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로, 끄면 부하 적은 계정으로 골고루(새 대화에만 적용)'));
     lines.push('');
     // ── Quota probe
     lines.push(bold('  Quota probe') + dim('  — refresh idle accounts from the usage endpoint'));
@@ -5205,7 +5240,10 @@ export class TUI {
     // [local patch 2026-10-30 원장] 추가 사용(번들)을 켜 둔 계정 수 · 지금 추가 사용으로 서비스 중인 계정 수.
     const xuN = accts.filter((/** @type {any} */ a) => a.allowExtraUsage === true).length;
     const xuServingN = accts.filter((/** @type {any} */ a) => this._onExtraUsage(a)).length;
-    const summary = ` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}${xuN ? ` · ${green(`추가사용 ${xuN}`)}` : ''}${xuServingN ? ` · ${orange(`추가사용 중 ${xuServingN}`)}` : ''}`;
+    // [local patch 2026-11-02 원장] 새 대화 배정 모드(T 키) — 늘 보인다.
+    const dm = this._distMode();
+    const distSeg = dm === 'adaptive' ? orange('배정 소진우선') : dm === 'off' ? dim('배정 끔') : '배정 균등';
+    const summary =` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}${xuN ? ` · ${green(`추가사용 ${xuN}`)}` : ''}${xuServingN ? ` · ${orange(`추가사용 중 ${xuServingN}`)}` : ''} · ${distSeg}`;
     const focus = this._focusSeg();
     lines.push(focus && vw(summary) + vw(focus) + 3 <= W ? summary + ' '.repeat(W - vw(summary) - vw(focus) - 1) + focus : summary);
     const host = this._hostLine(W);
@@ -5345,9 +5383,10 @@ export class TUI {
   _renderFooterKo() {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
     // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
+    // [local patch 2026-11-02 원장] 셋째 줄에 T 소진우선을 넣으면 88칸이라 E 추가사용(계정별 켜기/끄기)을 둘째 줄 끝으로.
     const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
-    const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기')];
-    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('E', '추가사용'), k('H', this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기'), k('E', '추가사용')];
+    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('T', this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'), k('H',this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 
@@ -5356,7 +5395,7 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('K')} ${this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'}  ${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('K')} ${this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'}  ${bold('T')} ${this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'}  ${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'warm': {
         const picks = this._warmPick || [];
         const names = picks.map(a => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');

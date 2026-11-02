@@ -869,6 +869,9 @@ async function serverCommand() {
         if (config.sessionTitles != null) diskConfig.sessionTitles = config.sessionTitles;
         // [local patch 2026-10-30 원장] K 키(하위 세션 분산): 서버는 setSessionAffinity 로 즉시, 파일에도 남긴다.
         if (config.sessionAffinity != null) diskConfig.sessionAffinity = config.sessionAffinity;
+        // [local patch 2026-11-02 원장] T 키(소진우선 ↔ 균등): 서버는 setDistributeSessions 로 즉시, 파일에도 남긴다
+        // (안 쓰면 다음 reload 가 디스크 값으로 되돌린다).
+        if (config.distributeSessions != null) diskConfig.distributeSessions = config.distributeSessions;
         // Persist the route table (edited from the TUI routes screen).
         if (config.routes != null) diskConfig.routes = config.routes;
       }),
@@ -2763,6 +2766,10 @@ async function distributeCommand() {
     console.log('across equal-priority accounts by load. Off: quota-driven rotation only.');
     console.log('Adaptive: spread by remaining weekly credit and load rather than evenly, so the');
     console.log('most-spent account is finished off first without being run into its threshold.');
+    // [local patch 2026-11-02 원장] 지금 모드를 한글로(TUI 의 T 키 「소진우선」과 같은 말).
+    console.log(current === 'adaptive'
+      ? '현재: 소진우선(남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로)'
+      : current === 'even' ? '현재: 균등(새 대화는 부하가 적은 계정으로 골고루)' : '현재: 끔');
     return;
   }
 

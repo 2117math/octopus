@@ -246,8 +246,11 @@ test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
   const vw = s => [...s].reduce((n, c) => n + (/[ᄀ-ᇿ㄰-㆏가-힯＀-￯]/.test(c) ? 2 : 1), 0);
   for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
   assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
-  assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기/);
-  assert.match(lines[2], /K 하위분산 켜기\s+E 추가사용\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
+  assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기\s+E 추가사용/);
+  assert.match(lines[2], /K 하위분산 켜기\s+T 소진우선 켜기\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
+  // 소진우선이 켜져 있어도(라벨 「끄기」) 80칸 안.
+  tui.config.distributeSessions = 'adaptive';
+  for (const l of tui._renderFooterKo().map(stripAnsi)) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
 });
 
 test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서버 즉시 적용 + 저장 (원장 2026-10-30)', async () => {
@@ -270,6 +273,88 @@ test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서�
   assert.equal(tui.config.sessionAffinity, true);
   assert.deepEqual(applied, [false, true]);
   assert.match(stripAnsi(tui.log[0].msg), /하위 세션 분산 끔/);
+});
+
+// [원장 2026-11-02] T(ㅅ) 소진우선 = distributeSessions 'adaptive' ↔ true(균등). 하위분산(K)과는 다른 기능.
+const DRAIN_ON = '새 대화 배정: 소진우선 켬 — 남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로 갑니다';
+const DRAIN_OFF = '새 대화 배정: 소진우선 끔 — 새 대화는 부하가 적은 계정으로 골고루 갑니다(균등)';
+
+test('T: 바닥글 라벨은 상태대로 — 균등이면 「T 소진우선 켜기」, 소진우선이면 「끄기」(한글·영문 안내 모두)', () => {
+  const tui = makeTUI();
+  tui.config.distributeSessions = true;
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /K 하위분산 켜기\s+T 소진우선 켜기\s+H /);
+  assert.match(stripAnsi(tui._renderFooter()), /K 하위분산 켜기\s+T 소진우선 켜기\s+H /);
+  tui.config.distributeSessions = 'adaptive';
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /T 소진우선 끄기/);
+  assert.match(stripAnsi(tui._renderFooter()), /T 소진우선 끄기/);
+  // 매니저 값이 있으면 그것이 먼저(attach 모드는 서버 상태).
+  tui.am.distributionMode = 'even';
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /T 소진우선 켜기/);
+});
+
+test('koLayout: 요약 줄에 배정 모드가 늘 보인다 — 균등 · 소진우선(주황) · 끔(흐리게)', () => {
+  const tui = makeTUI();
+  tui.config.distributeSessions = true;
+  assert.match(renderToString(tui), /계정 3 · 사용 가능 1 · 쉬는 중 1 · 오류 1 · 배정 균등/);
+  tui.config.distributeSessions = 'adaptive';
+  const raw = renderRaw(tui);
+  assert.match(stripAnsi(raw), /· 배정 소진우선/);
+  assert.match(raw, /\x1b\[38;5;208m배정 소진우선/, '주황');
+  tui.config.distributeSessions = false;
+  const off = renderRaw(tui);
+  assert.match(stripAnsi(off), /· 배정 끔/);
+  assert.match(off, /\x1b\[2m배정 끔/, '흐리게');
+  delete tui.config.distributeSessions;
+  assert.match(renderToString(tui), /· 배정 끔/, '설정에 없으면 끔');
+  tui.am.distributionMode = 'adaptive';
+  assert.match(renderToString(tui), /· 배정 소진우선/, '매니저 값이 먼저');
+});
+
+test('T(ㅅ): 소진우선 켜기/끄기 = distributeSessions true → adaptive → true, 서버 즉시 적용 + 저장 + 알림', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.config.distributeSessions = true;
+  const applied = [];
+  tui.am.setDistributeSessions = v => { applied.push(v); };
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  tui._key('ㅅ');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.distributeSessions, 'adaptive');
+  assert.deepEqual(applied, ['adaptive']);
+  assert.equal(saved, 1);
+  assert.equal(stripAnsi(tui.log[0].msg), DRAIN_ON);
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /T 소진우선 끄기/);
+  tui._key('t');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.distributeSessions, true);
+  assert.deepEqual(applied, ['adaptive', true]);
+  assert.equal(saved, 2);
+  assert.equal(stripAnsi(tui.log[0].msg), DRAIN_OFF);
+  // 끔(false)에서 누르면 소진우선, 대문자 T 도 같다.
+  tui.config.distributeSessions = false;
+  tui._key('T');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.distributeSessions, 'adaptive');
+  assert.equal(tui.config.sessionAffinity, undefined, '하위분산(K)은 건드리지 않는다');
+});
+
+test('T: 저장이 실패하면 설정·서버 둘 다 되돌리고 실패를 알린다 · setDistributeSessions 없는 매니저도 괜찮다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  tui.config.distributeSessions = true;
+  const applied = [];
+  tui.am.setDistributeSessions = v => { applied.push(v); };
+  tui.saveConfig = async () => { throw new Error('disk full'); };
+  await tui._toggleDrainFirst();
+  assert.equal(tui.config.distributeSessions, true);
+  assert.deepEqual(applied, ['adaptive', true]);
+  assert.equal(stripAnsi(tui.log[0].msg), '새 대화 배정 저장 실패: disk full');
+  delete tui.am.setDistributeSessions;
+  tui.saveConfig = async () => {};
+  await tui._toggleDrainFirst();
+  assert.equal(tui.config.distributeSessions, 'adaptive');
+  assert.equal(stripAnsi(tui.log[0].msg), DRAIN_ON);
 });
 
 // [원장 2026-10-30] 추가 사용(번들): 실측 PC2 — 월 지출 한도 $40(limitMinor 4000), 2117math 는 $42.28 로 막힘.
