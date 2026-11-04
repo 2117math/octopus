@@ -129,6 +129,8 @@ import {
   setFocusAccount,
   addPlaceholderAccounts,
   setExtraUsage,
+  setFiveHourFirst,
+  configuredFiveHourAccounts,
 } from './config-ops.js';
 /** @typedef {import('./types.js').CodedError} CodedError */
 
@@ -165,6 +167,9 @@ const EXTRA_USAGE = [
   'Usage: octopus extra                              계정별 추가 사용(번들) 상태',
   '       octopus extra <all|이름[,이름]> on|off       켜기/끄기 (이름은 이메일, 도메인 없이도 됨)',
 ].join('\n');
+
+// [local patch 2026-11-04 원장] octopus fivehour — 5시간 계정 먼저 켜기/끄기.
+const FIVEHOUR_USAGE = 'Usage: octopus fivehour [on|off]   (5시간 계정 먼저: 새 대화를 5시간 제한이 있는 계정부터)';
 
 const REBALANCE_USAGE = 'Usage: octopus rebalance <on|off|seconds>   (seconds: idle time before a move, min 60; 0 = off)';
 
@@ -312,6 +317,10 @@ switch (command) {
     await distributeCommand();
     process.exit(0);
     break;
+  case 'fivehour':
+    await fivehourCommand();
+    process.exit(0);
+    break;
   case 'rebalance':
     await rebalanceCommand();
     process.exit(0);
@@ -436,7 +445,7 @@ async function serverCommand() {
     console.error(`[Octopus] Bad adaptiveDistribution setting in ${getConfigPath()}: ${err.message}`);
     process.exit(1);
   }
-  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions, sessionAffinity: config.sessionAffinity !== false });
+  const accountManager = new AccountManager(accounts, threshold, { routes: config.routes, ramp: config.stormRamp, distributeSessions: config.distributeSessions, expiryRouting: config.expiryRouting, advisorEligibility: config.advisorEligibility, adaptive, listener: localListener(config), rebalanceSessions: config.rebalanceSessions, sessionAffinity: config.sessionAffinity !== false, fiveHourFirst: config.fiveHourFirst === true });
   // [local patch 2026-10-27 원장] 집중 계정: 시작할 때도, 설정을 다시 읽을 때도 같은 규칙으로 적용.
   accountManager.setFocusAccount(config.focusAccount);
   // Names the activity log's session column from Claude Code's own on-disk
@@ -686,6 +695,9 @@ async function serverCommand() {
     // says false, read per selection off the manager.
     config.sessionAffinity = diskConfig.sessionAffinity !== false;
     accountManager.setSessionAffinity(config.sessionAffinity);
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저(octopus fivehour, TUI 의 U 키): 설정에 true 일 때만 켬.
+    config.fiveHourFirst = diskConfig.fiveHourFirst === true;
+    accountManager.setFiveHourFirst(config.fiveHourFirst);
     // [local patch 2026-10-27 원장] 집중 계정(`octopus focus`, TUI 의 f 키). 설정에서 그 계정이
     // 지워졌으면(이름이 목록에 없음) 집중도 해제하고 디스크의 값도 지운다.
     {
@@ -872,6 +884,8 @@ async function serverCommand() {
         // [local patch 2026-11-02 원장] T 키(소진우선 ↔ 균등): 서버는 setDistributeSessions 로 즉시, 파일에도 남긴다
         // (안 쓰면 다음 reload 가 디스크 값으로 되돌린다).
         if (config.distributeSessions != null) diskConfig.distributeSessions = config.distributeSessions;
+        // [local patch 2026-11-04 원장] U 키(5시간 계정 먼저): 서버는 setFiveHourFirst 로 즉시, 파일에도 남긴다.
+        if (config.fiveHourFirst != null) diskConfig.fiveHourFirst = config.fiveHourFirst;
         // Persist the route table (edited from the TUI routes screen).
         if (config.routes != null) diskConfig.routes = config.routes;
       }),
@@ -2791,6 +2805,42 @@ async function distributeCommand() {
   await notifyRunningServer(config);
 }
 
+// ── fivehour (5시간 계정 먼저) ──────────────────────────────
+
+// [local patch 2026-11-04 원장] 새 대화를 5시간 제한이 있는 계정부터 앉히기(account-manager _fiveHourFirstNarrow)
+// 켜기/끄기 — TUI 의 U 키와 같은 설정 `fiveHourFirst`. 바꾸기는 잠금 저장(atomicConfigUpdate — CLAUDE.md 23·31) 뒤
+// reload 로 즉시 적용, 이미 앉은 대화는 옮기지 않는다. 계정 이름은 서버가 켜져 있으면 서버의 판정, 아니면 설정의
+// `fiveHour: true` 계정만. 사용법 문자열 FIVEHOUR_USAGE 는 dispatch 위(아래에 두면 TDZ).
+async function fivehourCommand() {
+  const config = await loadOrCreateConfig();
+  const arg = args[1];
+  if (arg === undefined) {
+    const enabled = config.fiveHourFirst === true;
+    console.log(`Five-hour accounts first: ${enabled ? 'on' : 'off'}  (set with: octopus fivehour <on|off>)`);
+    if (!enabled) { console.log('5시간 계정 먼저: 끔'); return; }
+    const status = await readLocalStatus(config);
+    const live = status?.fiveHourFirst?.accounts;
+    const names = (Array.isArray(live) ? live.filter((/** @type {unknown} */ n) => typeof n === 'string') : configuredFiveHourAccounts(config))
+      .map((/** @type {string} */ n) => safeLine(n, 64));
+    console.log(`5시간 계정 먼저: 켬 — 5시간 제한이 있는 계정(${names.length ? names.join(', ') : '아직 모름'})부터 쓰고, 그 계정들의 5시간 또는 주간이 다 차면 나머지 계정으로`);
+    if (distributionMode(config.distributeSessions) === 'off') console.log('참고: 새 대화 배정이 꺼져 있으면(octopus distribute off) 효과가 없습니다.');
+    return;
+  }
+  const val = String(arg).toLowerCase();
+  const on = ['on', 'true', 'yes', '1', '켬', '켜기'].includes(val) ? true
+    : ['off', 'false', 'no', '0', '끔', '끄기'].includes(val) ? false : null;
+  if (on === null) {
+    console.error(FIVEHOUR_USAGE);
+    process.exit(1);
+  }
+  // 같은 값이면 다시 쓰지 않는다(서버와 함께 쓰는 파일) — 서버에는 그래도 알린다(distribute 와 같은 규칙).
+  if (setFiveHourFirst(config, on)) await atomicConfigUpdate((/** @type {any} */ disk) => { setFiveHourFirst(disk, on); });
+  console.log(on
+    ? '5시간 계정 먼저: 켬 — 새 대화는 5시간 제한이 있는 계정부터, 다 차면 나머지 계정으로 (이미 앉은 대화는 옮기지 않음)'
+    : '5시간 계정 먼저: 끔 — 원래 규칙(주간 구간 → 대화 수)으로');
+  await notifyRunningServer(config);
+}
+
 // ── rebalance ───────────────────────────────────────────────
 
 /** The idle-rebalance setting in words, for the CLI. A declaration, not a
@@ -3574,6 +3624,7 @@ Commands:
                       Spread new sessions across equal-priority accounts, each
                       pinned to its own for cache reuse (off by default);
                       'adaptive' spreads by remaining weekly credit and load
+  fivehour [on|off]   5시간 계정 먼저 — 새 대화를 5시간 제한이 있는 계정부터, 다 차면 나머지로
   rebalance [on|off|secs]
                       Move a pinned session that comes back after that many
                       idle seconds (default 300, its prompt cache gone) to the

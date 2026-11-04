@@ -584,3 +584,28 @@ export function setExtraUsage(config, spec, on) {
   }
   return { changed, skipped };
 }
+
+/**
+ * [local patch 2026-11-04 원장] 「5시간 계정 먼저」 켜기/끄기 — 설정 `fiveHourFirst`(켬 true · 끔 false, 없으면 끔).
+ * TUI 의 U 키와 같은 값. 바뀌는 것은 새 대화를 앉힐 계정뿐(account-manager `_fiveHourFirstNarrow`).
+ * @param {any} config
+ * @param {boolean} on
+ * @returns {boolean} 지금 뜻(켬/끔)이 바뀌었는가 — 같으면 쓰지 않는다
+ */
+export function setFiveHourFirst(config, on) {
+  if (typeof on !== 'boolean') throw new ConfigOpError('on 또는 off 로 정하세요');
+  const changed = (config.fiveHourFirst === true) !== on;
+  if (changed) config.fiveHourFirst = on;
+  return changed;
+}
+
+/**
+ * [local patch 2026-11-04 원장] 설정에서 5시간 제한이 있다고 손으로 지정한(`fiveHour: true`) 계정 이름들 —
+ * 서버가 꺼져 있을 때 `octopus fivehour` 가 보여 준다(켜져 있으면 서버의 판정 `fiveHourFirst.accounts`).
+ * @param {any} config
+ * @returns {string[]}
+ */
+export function configuredFiveHourAccounts(config) {
+  const accounts = Array.isArray(config?.accounts) ? config.accounts : [];
+  return accounts.filter((/** @type {any} */ a) => a?.fiveHour === true && typeof a.name === 'string').map((/** @type {any} */ a) => a.name);
+}

@@ -245,12 +245,18 @@ test('한글 안내는 세 줄이고 줄마다 80칸 안이다', () => {
   assert.equal(lines.length, 3);
   const vw = s => [...s].reduce((n, c) => n + (/[ᄀ-ᇿ㄰-㆏가-힯＀-￯]/.test(c) ? 2 : 1), 0);
   for (const l of lines) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
-  assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침/);
+  // [원장 2026-11-04] U 5시간먼저가 셋째 줄에 들어가며 X 정리는 첫째 줄 끝으로, H 는 「다쓴 숨김/표시」로.
+  assert.match(lines[0], /S 계정전환.*W 5시간켜기.*R 새로고침\s+X 정리$/);
   assert.match(lines[1], /L 다시로그인\s+N 새계정\s+A 미리넣기\s+D 끄기\/켜기\s+O 순서\s+B 계정빼기\s+E 추가사용/);
-  assert.match(lines[2], /K 하위분산 켜기\s+T 소진우선 켜기\s+H 다쓴계정 숨기기\s+X 정리\s+G 설정\s+Q 종료/);
-  // 소진우선이 켜져 있어도(라벨 「끄기」) 80칸 안.
+  assert.match(lines[2], /K 하위분산 켜기\s+T 소진우선 켜기\s+U 5시간먼저 켜기\s+H 다쓴 숨김\s+G 설정\s+Q 종료/);
+  // 소진우선·5시간먼저가 켜져 있고 다쓴 계정을 숨겨도(라벨 「끄기」·「표시」) 80칸 안.
   tui.config.distributeSessions = 'adaptive';
-  for (const l of tui._renderFooterKo().map(stripAnsi)) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
+  tui.config.fiveHourFirst = true;
+  tui.config.hideSpent = true;
+  tui.config.sessionAffinity = false;
+  const on = tui._renderFooterKo().map(stripAnsi);
+  for (const l of on) assert.ok(vw(l) <= 80, `${vw(l)}: ${l}`);
+  assert.match(on[2], /U 5시간먼저 끄기\s+H 다쓴 표시/);
 });
 
 test('K(ㅏ): 하위 세션 분산 켜기/끄기 = sessionAffinity 반전, 서버 즉시 적용 + 저장 (원장 2026-10-30)', async () => {
@@ -282,8 +288,9 @@ const DRAIN_OFF = '새 대화 배정: 소진우선 끔 — 새 대화는 부하�
 test('T: 바닥글 라벨은 상태대로 — 균등이면 「T 소진우선 켜기」, 소진우선이면 「끄기」(한글·영문 안내 모두)', () => {
   const tui = makeTUI();
   tui.config.distributeSessions = true;
-  assert.match(stripAnsi(tui._renderFooterKo()[2]), /K 하위분산 켜기\s+T 소진우선 켜기\s+H /);
-  assert.match(stripAnsi(tui._renderFooter()), /K 하위분산 켜기\s+T 소진우선 켜기\s+H /);
+  // [원장 2026-11-04] T 와 H 사이에 U 5시간먼저가 들어갔다.
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /K 하위분산 켜기\s+T 소진우선 켜기\s+U 5시간먼저 켜기\s+H /);
+  assert.match(stripAnsi(tui._renderFooter()), /K 하위분산 켜기\s+T 소진우선 켜기\s+U 5시간먼저 켜기\s+H /);
   tui.config.distributeSessions = 'adaptive';
   assert.match(stripAnsi(tui._renderFooterKo()[2]), /T 소진우선 끄기/);
   assert.match(stripAnsi(tui._renderFooter()), /T 소진우선 끄기/);
@@ -355,6 +362,101 @@ test('T: 저장이 실패하면 설정·서버 둘 다 되돌리고 실패를 �
   await tui._toggleDrainFirst();
   assert.equal(tui.config.distributeSessions, 'adaptive');
   assert.equal(stripAnsi(tui.log[0].msg), DRAIN_ON);
+});
+
+// [원장 2026-11-04] U(ㅕ) 5시간 계정 먼저 = 설정 fiveHourFirst. makeTUI 의 a·b 는 5시간 사용률·리셋이 있어 5시간 계정.
+const FH_ON = '5시간 계정 먼저 켬 — 5시간 제한이 있는 계정(a, b)부터 쓰고, 다 차면 나머지 계정으로 갑니다. 이미 앉은 대화는 옮기지 않습니다';
+const FH_OFF = '5시간 계정 먼저 끔 — 원래 규칙(주간 구간 → 대화 수)으로 돌아갑니다';
+
+test('U: 바닥글 라벨은 상태대로 — 꺼져 있으면 「U 5시간먼저 켜기」, 켜져 있으면 「끄기」(한글·영문 안내 모두)', () => {
+  const tui = makeTUI();
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /U 5시간먼저 켜기/);
+  assert.match(stripAnsi(tui._renderFooter()), /U 5시간먼저 켜기/);
+  tui.config.fiveHourFirst = true;
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /U 5시간먼저 끄기/);
+  assert.match(stripAnsi(tui._renderFooter()), /U 5시간먼저 끄기/);
+  // 매니저 값이 있으면 그것이 먼저(attach 모드는 서버 상태).
+  tui.am.fiveHourFirst = false;
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /U 5시간먼저 켜기/);
+});
+
+test('koLayout: 요약 줄에 5시간먼저가 늘 보인다 — 끔(흐리게) · 켬(N)(녹색, N = 5시간 계정 수)', () => {
+  const tui = makeTUI();
+  const off = renderRaw(tui);
+  assert.match(stripAnsi(off), /· 배정 \S+ · 5시간먼저 끔/);
+  assert.match(off, /\x1b\[2m5시간먼저 끔/, '흐리게');
+  tui.config.fiveHourFirst = true;
+  const on = renderRaw(tui);
+  assert.match(stripAnsi(on), /· 5시간먼저 켬\(2\)/);
+  assert.match(on, /\x1b\[32m5시간먼저 켬\(2\)/, '녹색');
+  // 조회가 5시간 제한이 없다고 말한 계정은 빠지고, 수동 지정(fiveHour)이 먼저다.
+  tui.am.accounts[1].quota.sessionWindowStated = false;
+  assert.match(renderToString(tui), /· 5시간먼저 켬\(1\)/);
+  tui.am.accounts[2].fiveHour = true;
+  assert.match(renderToString(tui), /· 5시간먼저 켬\(2\)/);
+  tui.am.fiveHourFirst = false;
+  assert.match(renderToString(tui), /· 5시간먼저 끔/, '매니저 값이 먼저');
+});
+
+test('U(ㅕ): 5시간먼저 켜기/끄기 = fiveHourFirst 반전, 서버 즉시 적용 + 저장 + 알림 (ㅕ·u·U 모두)', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  const applied = [];
+  tui.am.setFiveHourFirst = v => { applied.push(v); };
+  let saved = 0;
+  tui.saveConfig = async () => { saved++; };
+  tui._key('ㅕ');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.fiveHourFirst, true);
+  assert.deepEqual(applied, [true]);
+  assert.equal(saved, 1);
+  assert.equal(stripAnsi(tui.log[0].msg), FH_ON);
+  assert.match(stripAnsi(tui._renderFooterKo()[2]), /U 5시간먼저 끄기/);
+  tui._key('u');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.fiveHourFirst, false);
+  assert.deepEqual(applied, [true, false]);
+  assert.equal(saved, 2);
+  assert.equal(stripAnsi(tui.log[0].msg), FH_OFF);
+  tui._key('U');
+  await new Promise(r => setImmediate(r));
+  assert.equal(tui.config.fiveHourFirst, true);
+  assert.equal(tui.config.distributeSessions, undefined, '배정 모드(T)는 건드리지 않는다');
+});
+
+test('U: 저장이 실패하면 설정·서버 둘 다 되돌리고 실패를 알린다 · setFiveHourFirst 없는 매니저도 괜찮다', async () => {
+  const tui = makeTUI();
+  tui.render = () => {};
+  const applied = [];
+  tui.am.setFiveHourFirst = v => { applied.push(v); };
+  tui.saveConfig = async () => { throw new Error('disk full'); };
+  await tui._toggleFiveHourFirst();
+  assert.equal('fiveHourFirst' in tui.config, false, '없던 키는 다시 없음');
+  assert.deepEqual(applied, [true, false]);
+  assert.equal(stripAnsi(tui.log[0].msg), '5시간 계정 먼저 저장 실패: disk full');
+  delete tui.am.setFiveHourFirst;
+  tui.saveConfig = async () => {};
+  await tui._toggleFiveHourFirst();
+  assert.equal(tui.config.fiveHourFirst, true);
+  assert.equal(stripAnsi(tui.log[0].msg), FH_ON);
+});
+
+test('koLayout: 조회가 5시간 제한이 없다고 한 계정의 5시간 칸은 흐린 「없음」(모름 회색 칸과 구분)', () => {
+  const tui = makeTUI();
+  const now = Date.now();
+  tui.am.accounts.push({ name: 'n@gmail.com', index: 3, type: 'oauth', status: 'active', credential: 't', quota: { sessionWindowStated: false, unified7d: 0.3, unified7dReset: now + 50 * H } });
+  tui.config.accounts.push({ name: 'n@gmail.com', type: 'oauth' });
+  tui.am.accounts.push({ name: 'u@gmail.com', index: 4, type: 'oauth', status: 'active', credential: 't', quota: { unified7d: 0.3, unified7dReset: now + 50 * H } });
+  tui.config.accounts.push({ name: 'u@gmail.com', type: 'oauth' });
+  const raw = renderRaw(tui);
+  const out = stripAnsi(raw);
+  assert.match(out, /^\s+n\s+없음\s+●\s+30%/m);
+  assert.match(raw, /\x1b\[2m\s+없음/, '흐리게');
+  assert.doesNotMatch(out, /^\s+u\s+없음/m, '모름(기록 없음)은 「없음」이 아니다');
+  // 칸 폭은 그대로 — 일주일 막대가 다른 줄과 같은 화면 열에서 시작(한글은 2칸).
+  const vw = s => [...s].reduce((n, c) => n + (/[ᄀ-ᇿ㄰-㆏가-힯＀-￯]/.test(c) ? 2 : 1), 0);
+  const col = name => { const l = out.split('\n').find(x => new RegExp(`^\\s+${name}\\s`).test(x)); return vw(l.slice(0, l.indexOf('30%'))); };
+  assert.equal(col('n'), col('u'));
 });
 
 // [원장 2026-10-30] 추가 사용(번들): 실측 PC2 — 월 지출 한도 $40(limitMinor 4000), 2117math 는 $42.28 로 막힘.

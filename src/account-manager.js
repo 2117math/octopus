@@ -303,6 +303,23 @@ export function accountAllowsExtraUsage(acct) {
 }
 
 /**
+ * [local patch 2026-11-04 원장] 5시간 제한이 있는 계정인가 — 「5시간 계정 먼저」(설정 `fiveHourFirst`)의 판정.
+ * ① 계정 설정 `fiveHour` 가 true/false 면 그 값(수동 지정) ② 사용량 조회·응답이 남긴 `quota.sessionWindowStated`
+ * (true 있음 · false 없음 — 5시간 창이 끝나 `unified5h` 가 지워져도 남는 사실) ③ 모르면 5시간 사용률과 리셋 시각이
+ * 둘 다 알려져 있으면 있음. 순수 함수 — 매니저(_hasFiveHour)와 TUI(attach 모드 포함)가 같은 규칙을 쓴다.
+ *
+ * @param {Record<string, any>|null|undefined} acct
+ * @returns {boolean}
+ */
+export function hasFiveHourWindow(acct) {
+  if (typeof acct?.fiveHour === 'boolean') return acct.fiveHour;
+  const q = acct?.quota || {};
+  if (q.sessionWindowStated === true) return true;
+  if (q.sessionWindowStated === false) return false;
+  return Number.isFinite(q.unified5h) && q.unified5hReset != null;
+}
+
+/**
  * One account's own egress proxy (accounts[].routing), parsed and validated.
  * The URL carries scheme (http/socks4/socks4a/socks5/socks5h), optional
  * user:pass auth, host and port — see account-routing.js. An unusable value is
@@ -407,6 +424,9 @@ function makeAccount(acct, index, listener = null) {
     // hand-edited config cannot start billing, and Anthropic OAuth logins only
     // (see accountAllowsExtraUsage). See _pickFallback.
     allowExtraUsage: accountAllowsExtraUsage(acct),
+    // [local patch 2026-11-04 원장] 5시간 제한 수동 지정(accounts[].fiveHour): true/false 만 뜻이 있고, 없으면
+    // null = 사용량 조회로 판정(hasFiveHourWindow).
+    fiveHour: typeof acct.fiveHour === 'boolean' ? acct.fiveHour : null,
     // This account's own egress proxy, parsed (accounts[].routing). Every
     // socket opened for the account tunnels through it — request forwarding,
     // token refresh, profile, usage and quota probes — and it outranks both sx
@@ -579,7 +599,7 @@ export class AccountManager {
    * @param {{ host: string, port: number }|null} [opts.listener]  this server's own address, so an accounts[].routing that points back at it is refused (see accountRouting)
    * @param {Object} [opts.rebalanceSessions]  idle rebalance, see rebalanceSetting (off by default)
    */
-  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null, rebalanceSessions, sessionAffinity = false } = {}) {
+  constructor(accounts, switchThreshold = 0.98, { refreshFn = refreshAccessToken, codexRefreshFn = refreshCodexToken, refreshCoordinator = (_account, refresh, _info) => refresh(), throttleProbeFloorMs, familyStaleMs, statusStaleMs, forcedRefreshFloorMs = FORCED_REFRESH_FLOOR_MS, routes, ramp, distributeSessions = false, adaptive, sessionTracker, expiryRouting, advisorEligibility, listener = null, rebalanceSessions, sessionAffinity = false, fiveHourFirst = false } = {}) {
     // How long a just-minted token is trusted against a forced refresh.
     this._forcedRefreshFloorMs = forcedRefreshFloorMs;
     // Injectable for tests (mirrors Prober's probeFn); defaults to the real
@@ -610,6 +630,9 @@ export class AccountManager {
     // pin of its own follows its session's siblings (see _selectForSession).
     // Read per selection, so the setter is the whole application on reload.
     this.sessionAffinity = sessionAffinity === true;
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저(config `fiveHourFirst`, 기본 끔): 새 대화를 앉힐 때 5시간 제한이
+    // 있는 계정부터(_fiveHourFirstNarrow). 배정할 때마다 읽으므로 setFiveHourFirst 가 적용의 전부.
+    this.fiveHourFirst = fiveHourFirst === true;
     // [local patch 2026-10-27 원장] 집중 계정(config `focusAccount`, 계정 이름). 있으면 새 세션·
     // failover·고정 세션 모두 이 계정이 먼저다(쓸 수 없는 동안만 다른 계정). setFocusAccount 로 적용.
     /** @type {string|null} */
@@ -1985,7 +2008,8 @@ export class AccountManager {
     // decides WITHIN the admitted set, which is the layering the two want:
     // expiry picks which windows are urgent, adaptive picks which of those to
     // spend and how hard.
-    const eligible = this._bandedCandidates(exclude, model, advisorModel);
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저: 켜져 있으면 5시간 제한이 있는 계정만(없으면 그대로).
+    const eligible = this._fiveHourFirstNarrow(this._bandedCandidates(exclude, model, advisorModel));
     if (eligible.length === 0) return null;
     // Banding may still span priorities (it passes everything through when
     // expiry routing is off), so the tier filter stays: an operator's ordering
@@ -2056,7 +2080,9 @@ export class AccountManager {
    * expiry routing is off) → soonest weekly reset (the existing tiebreak). */
   _pickLeastLoadedEven(exclude = null, model = null, advisorModel = null) {
     const now = Date.now();
-    const candidates = this._bandedCandidates(exclude, model, advisorModel);
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저: 켜져 있으면 5시간 제한이 있는 계정만 남기고(그 계정들이
+    // 5시간·주간을 다 써 _isAvailable 에서 빠지면 나머지 계정 그대로), 아래 정렬은 그 안에서 그대로.
+    const candidates = this._fiveHourFirstNarrow(this._bandedCandidates(exclude, model, advisorModel));
     // One clock for every candidate: pressure rises continuously as a window
     // nears its reset, so scoring two accounts at different instants decides an
     // exact tie on the microseconds between two Date.now() reads.
@@ -2991,6 +3017,32 @@ export class AccountManager {
   /** [local patch] Turn session affinity on or off (config `sessionAffinity`). */
   setSessionAffinity(enabled) {
     this.sessionAffinity = enabled === true;
+  }
+
+  /** [local patch 2026-11-04 원장] 「5시간 계정 먼저」 켜기/끄기(설정 `fiveHourFirst`). 바뀌는 것은 새 대화를 앉힐
+   *  계정뿐 — 이미 앉은 대화는 자기 계정에 고정된 채 옮기지 않는다(drain 없음). 설정을 다시 읽을 때마다 불러도 안전. */
+  setFiveHourFirst(enabled) {
+    this.fiveHourFirst = enabled === true;
+  }
+
+  /** [local patch 2026-11-04 원장] 5시간 제한이 있는 계정인가(hasFiveHourWindow — 수동 지정 → 조회 사실 → 사용률·리셋). */
+  _hasFiveHour(account) {
+    return hasFiveHourWindow(account);
+  }
+
+  /** [local patch 2026-11-04 원장] 5시간 제한이 있다고 판정된 계정 이름들(상태·CLI·TUI 표시용). */
+  fiveHourAccountNames() {
+    return this.accounts.filter(a => this._hasFiveHour(a)).map(a => a.name);
+  }
+
+  /** [local patch 2026-11-04 원장] 5시간 계정 먼저: 켜져 있고 후보 중 5시간 제한이 있는 계정이 하나라도 있으면 그
+   *  계정들만 남긴다(집중 계정은 정렬 맨 앞 규칙을 지키려고 같이 남김). 없으면 — 그 계정들이 5시간 또는 주간을 다 써
+   *  _isAvailable 에서 이미 빠졌으면 — 후보 그대로라 자연히 나머지 계정으로 간다. 꺼져 있으면 아무것도 안 한다.
+   *  @param {Array<Record<string, any>>} candidates */
+  _fiveHourFirstNarrow(candidates) {
+    if (!this.fiveHourFirst || candidates.length < 2) return candidates;
+    const five = candidates.filter(a => this._hasFiveHour(a) || (this.focusAccountName != null && a.name === this.focusAccountName));
+    return five.some(a => this._hasFiveHour(a)) ? five : candidates;
   }
 
   /** [local patch 2026-10-27 원장] 집중 계정 지정/해제(설정 `focusAccount`, 계정 이름). 설정을 다시 읽을
@@ -4954,6 +5006,11 @@ export class AccountManager {
       }
       if (usage.fiveHour.resetAt != null) q.unified5hReset = usage.fiveHour.resetAt;
     }
+    // [local patch 2026-11-04 원장] 5시간 제한이 있는지(「5시간 계정 먼저」의 판정, hasFiveHourWindow): 조회가 5시간
+    // 창을 주면 있음, 주간은 주는데 `five_hour` 가 null 이면 없음 — 모름(기록 없음)과 없음(false)을 가른다
+    // (applyCodexUsageData·_updateCodexQuota 와 같은 규칙). 읽어 둔 5시간 값은 여기서 지우지 않는다(옛 동작 그대로).
+    if (usage.fiveHour) q.sessionWindowStated = true;
+    else if (usage.sevenDay) q.sessionWindowStated = false;
     if (usage.sevenDay) {
       if (usage.sevenDay.utilization != null) {
         q.unified7d = usage.sevenDay.utilization;
@@ -5658,6 +5715,9 @@ export class AccountManager {
       focusState: this.focusInfo()?.state ?? null,
       routes: this.getRoutes(),
       sessions: { ...sessions, distribute: this.distributeSessions, mode: this.distributionMode, draining: this.drainingCount() },
+      // [local patch 2026-11-04 원장] 5시간 계정 먼저 — 켬/끔과 5시간 제한이 있다고 판정된 계정 이름들
+      // (`octopus fivehour`·attach 화면이 읽음).
+      fiveHourFirst: { enabled: this.fiveHourFirst, accounts: this.fiveHourAccountNames() },
       // Empty outside adaptive mode, so the renderer needs no mode check of its
       // own and an older client simply sees nothing extra.
       adaptive: this._adaptiveStatsCached(),
@@ -5685,6 +5745,8 @@ export class AccountManager {
         // rather than only seeing this account's already-resolved default.
         switchThreshold: a.switchThreshold ?? null,
         allowExtraUsage: a.allowExtraUsage === true,
+        // [local patch 2026-11-04 원장] 5시간 제한 수동 지정(true/false, 없으면 null) — attach 화면이 같은 판정을 하게.
+        fiveHour: a.fiveHour ?? null,
         // True while this account is the extra-usage fallback — serving past
         // its quota and billing for it. The one state `unavailable` alone
         // cannot tell apart from an account that is simply out.

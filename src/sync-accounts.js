@@ -134,6 +134,9 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
     // (an API key, a third-party backend, a Codex login) stays opted out on
     // reload as it was at startup; the warning was makeAccount's to give.
     mgr.allowExtraUsage = accountAllowsExtraUsage(diskAcct);
+    // [local patch 2026-11-04 원장] 5시간 제한 수동 지정(accounts[].fiveHour)도 디스크를 따른다 — true/false 만,
+    // 지우면 null(사용량 조회로 판정). 배정할 때마다 읽으므로 재시작 없이 적용.
+    mgr.fiveHour = typeof diskAcct.fiveHour === 'boolean' ? diskAcct.fiveHour : null;
     // Same for a per-account routing proxy: it is read per request off this
     // object (server.js forwardRequest, ensureTokenFresh, the prober), so a
     // disk edit or a `teamclaude routing` change takes effect on the very next
@@ -197,6 +200,9 @@ export async function syncAccountsFromDisk(diskConfig, memConfig, accountManager
       // would win the save stencil's spread and undo the disk edit.
       if (typeof diskAcct.autoRedeemReset === 'boolean') cfgAcct.autoRedeemReset = diskAcct.autoRedeemReset;
       else delete cfgAcct.autoRedeemReset;
+      // [local patch 2026-11-04 원장] fiveHour 도 두 값 모두 뜻이 있어 둘 다 비춘다(false = 5시간 제한 없음으로 지정).
+      if (typeof diskAcct.fiveHour === 'boolean') cfgAcct.fiveHour = diskAcct.fiveHour;
+      else delete cfgAcct.fiveHour;
     }
     // Pick up enable/disable toggles; re-enabling clears a stuck error state.
     const wantDisabled = !!diskAcct.disabled;

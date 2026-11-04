@@ -21,7 +21,7 @@ import { sanitizeText, safeLine } from './safe-text.js';
 // The setting rules live in one module; the CLI, the MCP tools and this screen
 // all read them from there, so they cannot drift apart (#426).
 import { MAX_PROBE_SECONDS, ROUTE_COLORS, ConfigOpError, setRebalance } from './config-ops.js';
-import { rebalanceSetting, accountAllowsExtraUsage, distributionMode } from './account-manager.js';
+import { rebalanceSetting, accountAllowsExtraUsage, distributionMode, hasFiveHourWindow } from './account-manager.js';
 import { sessionColorCode } from './session-color.js';
 import { DEFAULT_WIDTH as DEFAULT_TITLE_WIDTH } from './session-titles.js';
 import { isLocalUpstream } from './provider.js';
@@ -1644,6 +1644,8 @@ export class TUI {
     else if (k === 'k') { this._toggleSessionAffinity(); }
     // [local patch 2026-11-02 원장] T(ㅅ): 새 대화 배정 「소진우선」 켜기/끄기(distributeSessions 'adaptive' ↔ true).
     else if (k === 't') { this._toggleDrainFirst(); }
+    // [local patch 2026-11-04 원장] U(ㅕ): 「5시간 계정 먼저」 켜기/끄기(설정 fiveHourFirst).
+    else if (k === 'u') { this._toggleFiveHourFirst(); }
     // [local patch 2026-10-28 원장] O(ㅐ): 계정 순서 바꾸기 — 설정 화면의 「Reorder accounts」를 바로 연다.
     // ↑↓ 고르기, ← 위로 · → 아래로(옮기는 즉시 적용, 키를 멈추면 저장), Enter/Esc 끝.
     else if (k === 'o' && this.am.accounts.length > 0) {
@@ -2853,6 +2855,43 @@ export class TUI {
     this._addLog(next === 'adaptive'
       ? '새 대화 배정: 소진우선 켬 — 남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로 갑니다'
       : '새 대화 배정: 소진우선 끔 — 새 대화는 부하가 적은 계정으로 골고루 갑니다(균등)');
+    if (this.running) this.render();
+  }
+
+  /** [local patch 2026-11-04 원장] 「5시간 계정 먼저」가 켜져 있는가 — 매니저 값(attach 모드는 서버 상태), 매니저에
+   *  없으면 설정 `fiveHourFirst`(true 일 때만 켬). */
+  _fiveHourFirstOn() {
+    const v = this.am?.fiveHourFirst;
+    return typeof v === 'boolean' ? v : this.config?.fiveHourFirst === true;
+  }
+
+  /** [local patch 2026-11-04 원장] 5시간 제한이 있다고 판정된 계정들(account-manager hasFiveHourWindow — 수동 지정
+   *  `fiveHour` → 조회 사실 `sessionWindowStated` → 사용률·리셋). */
+  _fiveHourAccounts() {
+    return (this.am?.accounts || []).filter((/** @type {any} */ a) => hasFiveHourWindow(a));
+  }
+
+  /** [local patch 2026-11-04 원장] U(ㅕ): 「5시간 계정 먼저」 켜기/끄기 = 설정 `fiveHourFirst` 반전(없으면 끔). 켜면 새
+   *  대화를 5시간 제한이 있는 계정부터 앉히고 그 계정들이 5시간 또는 주간을 다 써 받을 수 없을 때만 나머지 계정으로
+   *  (account-manager _fiveHourFirstNarrow). 서버에는 바로 적용(am.setFiveHourFirst), 파일에는 saveConfig(index.js 가
+   *  fiveHourFirst 를 디스크에 씀), 실패하면 되돌림. 이미 앉은 대화는 옮기지 않는다(T 키와 같은 모양). */
+  async _toggleFiveHourFirst() {
+    const prev = this.config.fiveHourFirst;
+    const was = this._fiveHourFirstOn();
+    const next = !was;
+    this.config.fiveHourFirst = next;
+    this.am.setFiveHourFirst?.(next);
+    try { await this.saveConfig(this.config); }
+    catch (/** @type {any} */ e) {
+      if (prev === undefined) delete this.config.fiveHourFirst; else this.config.fiveHourFirst = prev;
+      this.am.setFiveHourFirst?.(was);
+      this._addLog(`5시간 계정 먼저 저장 실패: ${e.message}`);
+      return;
+    }
+    const names = this._fiveHourAccounts().map((/** @type {any} */ a) => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');
+    this._addLog(next
+      ? `5시간 계정 먼저 켬 — 5시간 제한이 있는 계정(${names || '아직 모름'})부터 쓰고, 다 차면 나머지 계정으로 갑니다. 이미 앉은 대화는 옮기지 않습니다`
+      : '5시간 계정 먼저 끔 — 원래 규칙(주간 구간 → 대화 수)으로 돌아갑니다');
     if (this.running) this.render();
   }
 
@@ -4829,6 +4868,8 @@ export class TUI {
     lines.push(dim('  account. Acts only with session distribution on.'));
     // [local patch 2026-11-02 원장] 기본 화면의 T(ㅅ) 키 안내.
     lines.push(dim('  T 소진우선: 켜면 남은 주간 사용량이 가장 적은 계정부터 끝까지 다 쓰고 다음 계정으로, 끄면 부하 적은 계정으로 골고루(새 대화에만 적용)'));
+    // [local patch 2026-11-04 원장] 기본 화면의 U(ㅕ) 키 안내.
+    lines.push(dim('  U 5시간먼저: 켜면 5시간 제한이 있는 계정부터 쓰고, 그 계정들의 5시간 또는 주간이 다 차면 나머지 계정으로(새 대화에만 적용)'));
     lines.push('');
     // ── Quota probe
     lines.push(bold('  Quota probe') + dim('  — refresh idle accounts from the usage endpoint'));
@@ -5243,7 +5284,9 @@ export class TUI {
     // [local patch 2026-11-02 원장] 새 대화 배정 모드(T 키) — 늘 보인다.
     const dm = this._distMode();
     const distSeg = dm === 'adaptive' ? orange('배정 소진우선') : dm === 'off' ? dim('배정 끔') : '배정 균등';
-    const summary =` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}${xuN ? ` · ${green(`추가사용 ${xuN}`)}` : ''}${xuServingN ? ` · ${orange(`추가사용 중 ${xuServingN}`)}` : ''} · ${distSeg}`;
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저(U 키) — 늘 보인다. 켜져 있으면 5시간 제한이 있는 계정 수.
+    const fhSeg = this._fiveHourFirstOn() ? green(`5시간먼저 켬(${this._fiveHourAccounts().length})`) : dim('5시간먼저 끔');
+    const summary =` 계정 ${accts.length} · ${okN ? green(`사용 가능 ${okN}`) : red('사용 가능 0')} · 쉬는 중 ${restN} · ${errN ? red(`오류 ${errN}`) : '오류 0'}${offN ? ` · 꺼 둠 ${offN}` : ''}${pendN ? ` · ${orange(`결제 전 ${pendN}`)}` : ''}${xuN ? ` · ${green(`추가사용 ${xuN}`)}` : ''}${xuServingN ? ` · ${orange(`추가사용 중 ${xuServingN}`)}` : ''} · ${distSeg} · ${fhSeg}`;
     const focus = this._focusSeg();
     lines.push(focus && vw(summary) + vw(focus) + 3 <= W ? summary + ' '.repeat(W - vw(summary) - vw(focus) - 1) + focus : summary);
     const host = this._hostLine(W);
@@ -5310,7 +5353,11 @@ export class TUI {
         // 꺼 둔 계정(원장 2026-10-28 「구독이 남아서 잠깐 안 쓰는 것」)도 막대·구독은 그대로, 색만 진한 회색.
         const paint = (/** @type {string} */ s) => off ? offGray(strip(s)) : s;
         const cells = [
-          paint(bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn)),
+          // [local patch 2026-11-04 원장] 조회가 5시간 제한이 없다고 말한 계정(sessionWindowStated === false, 남은 값도
+          // 없음 — showSessionRow)은 흐린 「없음」 — 회색 칸(모름)과 구분.
+          paint(!showSessionRow(q)
+            ? dim(rpad(' '.repeat(Math.floor((BW - vw('없음')) / 2)) + '없음', BW))
+            : bar(q.unified5h, BW, q.unified5hReset, FIVE_HOUR_MS, th(a, 'unified5h'), pctOn)),
           rpad(off ? offGray('●') : this._autoDot(i), AUTO_W),
           paint(bar(q.unified7d, BW, q.unified7dReset, SEVEN_DAY_MS, th(a, 'unified7d'), pctOn)),
         ];
@@ -5384,9 +5431,11 @@ export class TUI {
     const k = (/** @type {string} */ key, /** @type {string} */ t) => `${bold(key)} ${t}`;
     // 1줄 쓰기 · 2줄 계정 관리 · 3줄 기타 (각 줄 80칸 안).
     // [local patch 2026-11-02 원장] 셋째 줄에 T 소진우선을 넣으면 88칸이라 E 추가사용(계정별 켜기/끄기)을 둘째 줄 끝으로.
-    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침')];
+    // [local patch 2026-11-04 원장] 셋째 줄에 U 5시간먼저를 넣으면 94칸이라 X 정리는 첫째 줄 끝으로(80칸), H 는
+    // 「다쓴 숨김/표시」로 줄인다(「다쓴계정 숨김」이어도 84칸 — 둘째 줄은 이미 80칸이라 받을 자리가 없음).
+    const line1 = [k('S', '계정전환'), k('M', '대화옮기기'), k('F', '집중'), ...(this.warmNow ? [k('W', '5시간켜기')] : []), k('P', '사용량조회'), k('R', '새로고침'), ...(this._cleanupAvailable() ? [k('X', '정리')] : [])];
     const line2 = [...(this.loginAccount ? [k('L', '다시로그인'), k('N', '새계정')] : []), ...(this.addPlaceholders ? [k('A', '미리넣기')] : []), k('D', '끄기/켜기'), k('O', '순서'), k('B', '계정빼기'), k('E', '추가사용')];
-    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('T', this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'), k('H',this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'), ...(this._cleanupAvailable() ? [k('X', '정리')] : []), k('G', '설정'), k('Q', '종료')];
+    const line3 = [k('K', this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'), k('T', this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'), k('U', this._fiveHourFirstOn() ? '5시간먼저 끄기' : '5시간먼저 켜기'), k('H', this.config?.hideSpent === true ? '다쓴 표시' : '다쓴 숨김'), k('G', '설정'), k('Q', '종료')];
     return [` ${line1.join('  ')}`, ` ${line2.join('  ')}`, ` ${line3.join('  ')}`];
   }
 
@@ -5395,7 +5444,7 @@ export class TUI {
       case 'normal':
         return this.remote
           ? ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('R')} 새로고침  ${bold('Q')} 종료`
-          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('K')} ${this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'}  ${bold('T')} ${this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'}  ${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
+          : ` ${bold('S')} 계정전환  ${bold('M')} 대화옮기기  ${bold('F')} 집중  ${bold('D')} 끄기/켜기  ${this.loginAccount ? `${bold('L')} 로그인  ${bold('N')} 새계정  ` : ''}${bold('P')} 사용량조회  ${this.warmNow ? `${bold('W')} 5시간켜기  ` : ''}${this._cleanupAvailable() ? `${bold('X')} 정리  ` : ''}${bold('K')} ${this.config?.sessionAffinity === false ? '하위분산 끄기' : '하위분산 켜기'}  ${bold('T')} ${this._distMode() === 'adaptive' ? '소진우선 끄기' : '소진우선 켜기'}  ${bold('U')} ${this._fiveHourFirstOn() ? '5시간먼저 끄기' : '5시간먼저 켜기'}  ${bold('H')} ${this.config?.hideSpent === true ? '다쓴계정 보이기' : '다쓴계정 숨기기'}  ${bold('R')} 새로고침  ${bold('G')} 설정  ${bold('Q')} 종료`;
       case 'warm': {
         const picks = this._warmPick || [];
         const names = picks.map(a => String(a.name).replace(KO_DOMAIN_RE, '')).join(', ');

@@ -350,6 +350,8 @@ export class RemoteAccountManager {
     // A server too old to send `mode` still reports `distribute`, so fall back
     // to the behaviour that flag alone used to mean rather than showing 'off'.
     this.distributionMode = sessions.mode || (sessions.distribute ? 'even' : 'off');
+    // [local patch 2026-11-04 원장] 5시간 계정 먼저 — 서버 값. 보내지 않는 서버면 undefined(화면이 설정으로 판정).
+    this.fiveHourFirst = typeof status?.fiveHourFirst?.enabled === 'boolean' ? status.fiveHourFirst.enabled : undefined;
     // Same rule as the accounts above, and for the same reason: the renderer
     // walks route.accounts and route.match directly, so a route the payload
     // leaves half-specified would take the whole dashboard down mid-frame.
